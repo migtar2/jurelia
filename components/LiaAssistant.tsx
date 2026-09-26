@@ -50,6 +50,8 @@ function LiaInner() {
   const moveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoMoveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentStateRef = useRef<LiaStateId>("idle");
 
   const [currentState, setCurrentState] = useState<LiaStateId>("idle");
   const [chatOpen, setChatOpen] = useState(false);
@@ -89,6 +91,8 @@ function LiaInner() {
     if (!isClient || !canvasRef.current) return;
 
     let destroyed = false;
+    let wasmReady = false;
+    let animLoaded = false;
 
     (async () => {
       const { DotLottie } = await import("@lottiefiles/dotlottie-web");
@@ -106,10 +110,17 @@ function LiaInner() {
         renderConfig: {
           autoResize: true,
           devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+          freezeOnOffscreen: false,
         },
       });
 
       runtimeRef.current = runtime;
+
+      // Only apply idle when BOTH WASM is ready AND animation is loaded
+      const tryActivate = () => {
+        if (destroyed || !wasmReady || !animLoaded) return;
+        applyState("idle");
+      };
 
       // Error handling
       runtime.addEventListener("loadError", (e: any) => {
@@ -125,30 +136,38 @@ function LiaInner() {
       // Complete → return to idle for one-shot states
       runtime.addEventListener("complete", () => {
         if (destroyed) return;
-        const s = getLiaState(currentState);
+        const s = getLiaState(currentStateRef.current);
         if (s.returnToIdle) applyState("idle");
       });
 
-      // Apply idle when ready (handles both load and ready events)
-      const onReady = () => {
+      // ready = WASM module initialized
+      runtime.addEventListener("ready", () => {
         if (destroyed) return;
-        applyState("idle");
-      };
-      runtime.addEventListener("load", onReady);
-      runtime.addEventListener("ready", onReady);
+        wasmReady = true;
+        tryActivate();
+      });
 
-      // Fallback: if the animation doesn't fire load within 3s, try applying idle anyway
-      const fallbackTimer = setTimeout(() => {
+      // load = animation data fetched and parsed
+      runtime.addEventListener("load", () => {
+        if (destroyed) return;
+        animLoaded = true;
+        tryActivate();
+      });
+
+      // Fallback: if neither event fires within 5s, try anyway
+      fallbackTimerRef.current = setTimeout(() => {
         if (!destroyed && runtimeRef.current) {
           try { applyState("idle"); } catch {}
         }
-      }, 3000);
-
-      return () => clearTimeout(fallbackTimer);
+      }, 5000);
     })();
 
     return () => {
       destroyed = true;
+      if (fallbackTimerRef.current) {
+        clearTimeout(fallbackTimerRef.current);
+        fallbackTimerRef.current = null;
+      }
       runtimeRef.current?.destroy?.();
       runtimeRef.current = null;
     };
@@ -161,6 +180,7 @@ function LiaInner() {
       const runtime = runtimeRef.current;
       if (!runtime) return;
       const s = getLiaState(id);
+      currentStateRef.current = id;
       setCurrentState(id);
       runtime.pause?.();
       runtime.setLoop?.(s.loop);
@@ -325,6 +345,7 @@ function LiaInner() {
     return () => {
       if (moveTimerRef.current) clearTimeout(moveTimerRef.current);
       if (autoMoveRef.current) clearTimeout(autoMoveRef.current);
+      if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
       for (const t of chatTimersRef.current) clearTimeout(t);
     };
   }, []);
