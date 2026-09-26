@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, date, jsonb, boolean, integer, real, primaryKey, unique } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, date, jsonb, boolean, integer, real, primaryKey, unique, index } from "drizzle-orm/pg-core";
 
 /* ── Users ── */
 export const users = pgTable("users", {
@@ -265,3 +265,17 @@ export const userSubscriptions = pgTable("user_subscriptions", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+/* ── Usage Reservations — Quota enforcement (Phase 04) ── */
+export const usageReservations = pgTable("usage_reservations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  category: text("category").notNull(), // commercial category
+  periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+  state: text("state").notNull().default("reserved"), // reserved | committed | released
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  // Index for atomic quota checks
+  index("idx_usage_reservations_lookup").on(t.userId, t.category, t.periodStart, t.state),
+  index("idx_usage_reservations_user").on(t.userId),
+]);
