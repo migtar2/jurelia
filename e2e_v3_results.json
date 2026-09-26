@@ -1,0 +1,222 @@
+[
+  {
+    "idx": "3",
+    "status": "AMBIGUOUS",
+    "confidence": 45,
+    "expected_roj": "STS 2866/2025",
+    "candidate_roj": "",
+    "correct": true,
+    "false_positive": false,
+    "duration_s": 5.4,
+    "case_type": "A"
+  },
+  {
+    "idx": "4",
+    "status": "PROBABLE",
+    "confidence": 50,
+    "expected_roj": "",
+    "candidate_roj": "STS 899/2016",
+    "correct": true,
+    "false_positive": false,
+    "duration_s": 10.1,
+    "case_type": "H"
+  },
+  {
+    "idx": "5",
+    "status": "PROBABLE",
+    "confidence": 50,
+    "expected_roj": "STS 263/2025",
+    "candidate_roj": "STS 381/2020",
+    "correct": true,
+    "false_positive": false,
+    "duration_s": 6.5,
+    "case_type": "B"
+  },
+  {
+    "idx": "7",
+    "status": "PROBABLE",
+    "confidence": 51,
+    "expected_roj": "STS 145/2025",
+    "candidate_roj": "STS 1039/2016",
+    "correct": true,
+    "false_positive": false,
+    "duration_s": 6.3,
+    "case_type": "A"
+  },
+  {
+    "idx": "8",
+    "status": "NOT_FOUND",
+    "confidence": 18,
+    "expected_roj": "STSJ CAT 236/2025",
+    "candidate_roj": "",
+    "correct": false,
+    "false_positive": false,
+    "duration_s": 38.6,
+    "case_type": "A"
+  },
+  {
+    "idx": "9",
+    "status": "NOT_FOUND",
+    "confidence": 3,
+    "expected_roj": "STSJ AS 1491/2025",
+    "candidate_roj": "",
+    "correct": false,
+    "false_positive": false,
+    "duration_s": 6.8,
+    "case_type": "B"
+  },
+  {
+    "idx": "13",
+    "status": "NOT_FOUND",
+    "confidence": 6,
+    "expected_roj": "STS 1000/2025",
+    "candidate_roj": "",
+    "correct": false,
+    "false_positive": false,
+    "duration_s": 13.5,
+    "case_type": "C"
+  },
+  {
+    "idx": "14",
+    "status": "NOT_FOUND",
+    "confidence": 18,
+    "expected_roj": "",
+    "candidate_roj": "",
+    "correct": true,
+    "false_positive": false,
+    "duration_s": 9.6,
+    "case_type": "E"
+  },
+  {
+    "idx": "15",
+    "status": "AMBIGUOUS",
+    "confidence": 45,
+    "expected_roj": "STS 428/2025",
+    "candidate_roj": "",
+    "correct": true,
+    "false_positive": false,
+    "duration_s": 5.3,
+    "case_type": "B"
+  },
+  {
+    "idx": "17",
+    "status": "AMBIGUOUS",
+    "confidence": 28,
+    "expected_roj": "STSJ M 2760/2025",
+    "candidate_roj": "",
+    "correct": true,
+    "false_positive": false,
+    "duration_s": 8.7,
+    "case_type": "A"
+  },
+  {
+    "idx": "20",
+    "status": "NOT_FOUND",
+    "confidence": 18,
+    "expected_roj": "STC 27/2025",
+    "candidate_roj": "",
+    "correct": false,
+    "false_positive": false,
+    "duration_s": 40.5,
+    "case_type": "A"
+  },
+  {
+    "idx": "22",
+    "status": "AMBIGUOUS",
+    "confidence": 48,
+    "expected_roj": "STSJ CAT 278/2025",
+    "candidate_roj": "",
+    "correct": true,
+    "false_positive": false,
+    "duration_s": 11.3,
+    "case_type": "A"
+  },
+  {
+    "idx": "23",
+    "status": "PROBABLE",
+    "confidence": 50,
+    "expected_roj": "STSJ M 4813/2025",
+    "candidate_roj": "STS 1275/2006",
+    "correct": true,
+    "false_positive": false,
+    "duration_s": 6.5,
+    "case_type": "A"
+  },
+  {
+    "idx": "R1",
+    "status": "AMBIGUOUS",
+    "confidence": 45,
+    "expected_roj": "STS 836/2025",
+    "candidate_roj": "",
+    "correct": true,
+    "false_positive": false,
+    "duration_s": 6.4,
+    "case_type": "A"
+  },
+  {
+    "idx": "R2",
+    "status": "NOT_FOUND",
+    "confidence": 3,
+    "expected_roj": "STS 951/2025",
+    "candidate_roj": "",
+    "correct": false,
+    "false_positive": false,
+    "duration_s": 7.8,
+    "case_type": "B"
+  },
+  {
+    "idx": "R6",
+    "status": "AMBIGUOUS",
+    "confidence": 48,
+    "expected_roj": "",
+    "candidate_roj": "",
+    "correct": true,
+    "false_positive": false,
+    "duration_s": 7.1,
+    "case_type": "C"
+  },
+  {
+    "idx": "R16",
+    "status": "PROBABLE",
+    "confidence": 50,
+    "expected_roj": "SAN 4666/2025",
+    "candidate_roj": "STS 5074/2014",
+    "correct": true,
+    "false_positive": false,
+    "duration_s": 6.1,
+    "case_type": "B"
+  },
+  {
+    "idx": "R18",
+    "status": "NOT_FOUND",
+    "confidence": 15,
+    "expected_roj": "STS 1724/2025",
+    "candidate_roj": "",
+    "correct": false,
+    "false_positive": false,
+    "duration_s": 8.2,
+    "case_type": "A"
+  },
+  {
+    "idx": "E1",
+    "status": "PROBABLE",
+    "confidence": 73,
+    "expected_roj": "",
+    "candidate_roj": "STS 3467/2021",
+    "correct": true,
+    "false_positive": false,
+    "duration_s": 13.6,
+    "case_type": "C"
+  },
+  {
+    "idx": "E2",
+    "status": "NOT_FOUND",
+    "confidence": 3,
+    "expected_roj": "STS 350/2025",
+    "candidate_roj": "",
+    "correct": false,
+    "false_positive": false,
+    "duration_s": 8.4,
+    "case_type": "A"
+  }
+]
