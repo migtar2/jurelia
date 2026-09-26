@@ -94,6 +94,9 @@ function LiaInner() {
       const { DotLottie } = await import("@lottiefiles/dotlottie-web");
       if (destroyed || !canvasRef.current) return;
 
+      // Self-host WASM to avoid CDN failures in production
+      DotLottie.setWasmUrl("/dotlottie-player.wasm");
+
       const runtime = new DotLottie({
         canvas: canvasRef.current,
         src: "/lia-bot.json",
@@ -108,15 +111,40 @@ function LiaInner() {
 
       runtimeRef.current = runtime;
 
+      // Error handling
+      runtime.addEventListener("loadError", (e: any) => {
+        if (destroyed) return;
+        console.error("[LIA] loadError:", e?.error ?? e);
+      });
+
+      runtime.addEventListener("renderError", (e: any) => {
+        if (destroyed) return;
+        console.error("[LIA] renderError:", e?.error ?? e);
+      });
+
+      // Complete → return to idle for one-shot states
       runtime.addEventListener("complete", () => {
         if (destroyed) return;
         const s = getLiaState(currentState);
         if (s.returnToIdle) applyState("idle");
       });
 
-      runtime.addEventListener("load", () => {
-        if (!destroyed) applyState("idle");
-      });
+      // Apply idle when ready (handles both load and ready events)
+      const onReady = () => {
+        if (destroyed) return;
+        applyState("idle");
+      };
+      runtime.addEventListener("load", onReady);
+      runtime.addEventListener("ready", onReady);
+
+      // Fallback: if the animation doesn't fire load within 3s, try applying idle anyway
+      const fallbackTimer = setTimeout(() => {
+        if (!destroyed && runtimeRef.current) {
+          try { applyState("idle"); } catch {}
+        }
+      }, 3000);
+
+      return () => clearTimeout(fallbackTimer);
     })();
 
     return () => {
