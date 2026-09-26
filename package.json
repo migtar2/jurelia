@@ -11,6 +11,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@lottiefiles/dotlottie-web": "^0.77.1",
     "@mozilla/readability": "^0.6.0",
     "@neondatabase/serverless": "^1.1.0",
     "@types/jsdom": "^30.0.0",

@@ -5,6 +5,7 @@ import HelpDrawer from "@/components/HelpDrawer";
 import HelpButton from "@/components/HelpButton";
 import Onboarding from "@/components/Onboarding";
 import Footer from "@/components/Footer";
+import LiaAssistant from "@/components/LiaAssistant";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -43,6 +44,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <HelpDrawer />
         <HelpButton />
         <Onboarding />
+        <LiaAssistant />
       </body>
     </html>
   );
