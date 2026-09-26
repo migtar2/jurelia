@@ -3,6 +3,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
+import { requireAuth } from "@/lib/auth/guard";
+import { callAiJson } from "@/lib/ai";
 import { validateUrl, fetchArticle } from "@/lib/news/fetch-article";
 import { extractArticle } from "@/lib/news/extract-article";
 import { extractLegalMetadata } from "@/lib/news/extract-legal-metadata";
@@ -18,9 +20,6 @@ import type {
 
 const CENDOJ_API = process.env.CENDOJ_API_URL || "http://127.0.0.1:8000";
 const CENDOJ_TOKEN = process.env.CENDOJ_SERVICE_TOKEN || "";
-const AI_BASE_URL = process.env.AI_BASE_URL || "https://api.openai.com/v1";
-const AI_API_KEY = process.env.AI_API_KEY || "";
-const AI_MODEL = process.env.AI_MODEL || "gpt-4o-mini";
 
 function authHeaders(): Record<string, string> {
   const h: Record<string, string> = {};
@@ -144,48 +143,34 @@ async function fetchDecisionText(decision: {
   return { text: "", source: "metadata_only" };
 }
 
-/* ── Call AI helper ── */
+/* ── Call AI helper via centralized client ── */
 
 async function callAI(
   systemPrompt: string,
   userMessage: string,
+  operationType: "news_claim_extraction" | "news_comparison",
+  userId: string,
   maxTokens: number = 4000
-): Promise<Record<string, unknown>> {
-  const aiRes = await fetch(`${AI_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${AI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: AI_MODEL,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage },
-      ],
-      temperature: 0.2,
-      max_tokens: maxTokens,
-      response_format: { type: "json_object" },
-    }),
-    signal: AbortSignal.timeout(90_000),
+): Promise<{ data: Record<string, unknown>; aiUsage: { provider: string; model: string; tokens: unknown; cost_usd: number | null; latency_ms: number } }> {
+  const aiResult = await callAiJson<Record<string, unknown>>({
+    operation_type: operationType,
+    user_id: userId,
+    system_prompt: systemPrompt,
+    user_message: userMessage,
+    temperature: 0.2,
+    max_tokens: maxTokens,
   });
 
-  if (!aiRes.ok) {
-    const errText = await aiRes.text();
-    throw new Error(`AI API error: HTTP ${aiRes.status} — ${errText.slice(0, 200)}`);
-  }
-
-  const aiData = await aiRes.json();
-  const content = aiData.choices?.[0]?.message?.content;
-  if (!content) throw new Error("AI returned no content");
-
-  try {
-    return JSON.parse(content);
-  } catch {
-    const match = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (match) return JSON.parse(match[1].trim());
-    throw new Error("AI response is not valid JSON");
-  }
+  return {
+    data: aiResult.data,
+    aiUsage: {
+      provider: aiResult.provider,
+      model: aiResult.model,
+      tokens: aiResult.usage,
+      cost_usd: aiResult.cost.total_cost,
+      latency_ms: aiResult.latency_ms,
+    },
+  };
 }
 
 /* ── POST handler ── */
@@ -201,12 +186,8 @@ export async function POST(req: NextRequest) {
   const requestId = randomUUID();
   const totalStart = Date.now();
 
-  if (!AI_API_KEY) {
-    return NextResponse.json(
-      { error: "AI_API_KEY no configurada en el servidor" },
-      { status: 503 }
-    );
-  }
+  const auth = await requireAuth();
+  if (auth.error) return auth.error;
 
   let body: CompareRequestBody;
   try {
@@ -340,12 +321,18 @@ export async function POST(req: NextRequest) {
   ].join("\n");
 
   let claims: ExtractedClaim[];
+  let claimsAiUsage: { provider: string; model: string; tokens: unknown; cost_usd: number | null; latency_ms: number } | null = null;
   try {
-    const parsed = (await callAI(
+    const claimsResult = await callAI(
       CLAIM_EXTRACTION_PROMPT,
       articleContext,
+      "news_claim_extraction",
+      auth.user.userId,
       2000
-    )) as { claims?: unknown[] };
+    );
+
+    claimsAiUsage = claimsResult.aiUsage;
+    const parsed = claimsResult.data as { claims?: unknown[] };
 
     claims = Array.isArray(parsed.claims)
       ? (parsed.claims as Record<string, unknown>[]).map((c, i) => ({
@@ -401,8 +388,11 @@ export async function POST(req: NextRequest) {
   ].join("\n");
 
   let comparisonData: Record<string, unknown>;
+  let comparisonAiUsage: { provider: string; model: string; tokens: unknown; cost_usd: number | null; latency_ms: number } | null = null;
   try {
-    comparisonData = await callAI(COMPARISON_PROMPT, comparisonUserMessage, 4000);
+    const comparisonResult = await callAI(COMPARISON_PROMPT, comparisonUserMessage, "news_comparison", auth.user.userId, 4000);
+    comparisonData = comparisonResult.data;
+    comparisonAiUsage = comparisonResult.aiUsage;
   } catch (err: unknown) {
     console.error("[NEWS_COMPARE] Comparison error:", err);
     return NextResponse.json(
@@ -484,5 +474,8 @@ export async function POST(req: NextRequest) {
     })
   );
 
-  return NextResponse.json(result);
+  return NextResponse.json({
+    ...result,
+    _ai_usage: [claimsAiUsage, comparisonAiUsage].filter(Boolean),
+  });
 }

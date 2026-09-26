@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireAuth } from "@/lib/auth/guard";
+import { callAiJson } from "@/lib/ai";
 
 const CENDOJ_API = process.env.CENDOJ_API_URL || "http://127.0.0.1:8000";
 const CENDOJ_TOKEN = process.env.CENDOJ_SERVICE_TOKEN || "";
-const AI_BASE_URL = process.env.AI_BASE_URL || "https://api.openai.com/v1";
-const AI_API_KEY = process.env.AI_API_KEY || "";
-const AI_MODEL = process.env.AI_MODEL || "gpt-4o-mini";
 
 function authHeaders(): Record<string, string> {
   const h: Record<string, string> = {};
@@ -67,12 +66,9 @@ Debes responder EXCLUSIVAMENTE con un JSON válido (sin markdown, sin comentario
 }`;
 
 export async function POST(req: NextRequest) {
-  if (!AI_API_KEY) {
-    return NextResponse.json(
-      { error: "AI_API_KEY no configurada en el servidor" },
-      { status: 503 }
-    );
-  }
+  // Auth requerido (Phase 01 — security precondition)
+  const auth = await requireAuth();
+  if (auth.error) return auth.error;
 
   let body: SummarizeRequest;
   try {
@@ -180,77 +176,42 @@ export async function POST(req: NextRequest) {
 
   const userMessage = `${contextLines.length > 0 ? contextLines.join("\n") + "\n\n" : ""}--- INICIO DEL TEXTO ---\n${textToSend}${truncated ? "\n[...TEXTO TRUNCADO...]" : ""}\n--- FIN DEL TEXTO ---`;
 
-  // Step 3: Call AI API
+  // Step 3: Call AI via centralized client
   try {
-    const aiRes = await fetch(`${AI_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${AI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: AI_MODEL,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: userMessage },
-        ],
-        temperature: 0.3,
-        max_tokens: 2000,
-        response_format: { type: "json_object" },
-      }),
-      signal: AbortSignal.timeout(60_000),
+    const aiResult = await callAiJson<Record<string, unknown>>({
+      operation_type: "judgment_summary",
+      user_id: auth.user.userId,
+      system_prompt: SYSTEM_PROMPT,
+      user_message: userMessage,
+      temperature: 0.3,
+      max_tokens: 2000,
     });
 
-    if (!aiRes.ok) {
-      const errText = await aiRes.text();
-      console.error("[SUMMARIZE] AI API error:", aiRes.status, errText);
-      return NextResponse.json(
-        { error: `Error del servicio AI: HTTP ${aiRes.status}` },
-        { status: 502 }
-      );
-    }
-
-    const aiData = await aiRes.json();
-    const content = aiData.choices?.[0]?.message?.content;
-
-    if (!content) {
-      return NextResponse.json(
-        { error: "El servicio AI no devolvió contenido" },
-        { status: 502 }
-      );
-    }
-
-    // Parse AI response
-    let parsed: Omit<SummaryResponse, "source_identifiers" | "provenance">;
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      // Try to extract JSON from markdown code block
-      const match = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (match) {
-        parsed = JSON.parse(match[1].trim());
-      } else {
-        return NextResponse.json(
-          { error: "Respuesta AI no es JSON válido" },
-          { status: 502 }
-        );
-      }
-    }
+    const parsed = aiResult.data;
 
     const result: SummaryResponse = {
-      facts_summary: parsed.facts_summary || "",
-      legal_question: parsed.legal_question || "",
-      court_reasoning: parsed.court_reasoning || "",
-      holding: parsed.holding || "",
-      result: parsed.result || "",
-      relevant_excerpt: parsed.relevant_excerpt || "",
-      excerpt_location: parsed.excerpt_location || "",
+      facts_summary: (parsed.facts_summary as string) || "",
+      legal_question: (parsed.legal_question as string) || "",
+      court_reasoning: (parsed.court_reasoning as string) || "",
+      holding: (parsed.holding as string) || "",
+      result: (parsed.result as string) || "",
+      relevant_excerpt: (parsed.relevant_excerpt as string) || "",
+      excerpt_location: (parsed.excerpt_location as string) || "",
       source_identifiers: sourceIdentifiers,
       provenance: "AI_GENERATED",
-      uncertainty: parsed.uncertainty || null,
+      uncertainty: (parsed.uncertainty as string) || null,
     };
 
-    return NextResponse.json(result);
+    return NextResponse.json({
+      ...result,
+      _ai_usage: {
+        provider: aiResult.provider,
+        model: aiResult.model,
+        tokens: aiResult.usage,
+        cost_usd: aiResult.cost.total_cost,
+        latency_ms: aiResult.latency_ms,
+      },
+    });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[SUMMARIZE] Error:", msg);

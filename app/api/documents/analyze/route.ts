@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth/guard";
+import { callAiJson } from "@/lib/ai";
 import { db } from "@/lib/db";
 import { documents, documentAnalyses } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 
 /* ── Constants ── */
-const MIMO_API_URL = "https://api.xiaomimimo.com/v1/chat/completions";
-const MIMO_MODEL = "mimo-v2.5-pro";
 const MAX_TEXT_CHARS = 12_000; // limit text sent to AI
 const MAX_ISSUES = 10;
 
@@ -105,11 +104,11 @@ Estructura JSON requerida:
   ]
 }`;
 
-/* ── Call MiMo API ── */
+/* ── Call MiMo API via centralized client ── */
 async function callMimoAnalysis(
   documentText: string,
-  apiKey: string,
-): Promise<AnalysisResult> {
+  userId: string,
+): Promise<{ result: AnalysisResult; aiUsage: { provider: string; model: string; tokens: unknown; cost_usd: number | null; latency_ms: number } }> {
   // Truncate if too long
   const truncated =
     documentText.length > MAX_TEXT_CHARS
@@ -124,39 +123,17 @@ ${truncated}
 
 Analiza el documento anterior y devuelve el JSON con la estructura indicada.`;
 
-  const response = await fetch(MIMO_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: MIMO_MODEL,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: 0.1,
-      max_tokens: 4000,
-    }),
+  const aiResult = await callAiJson<AnalysisResult>({
+    operation_type: "document_analysis",
+    user_id: userId,
+    provider: "mimo",
+    system_prompt: SYSTEM_PROMPT,
+    user_message: userPrompt,
+    temperature: 0.1,
+    max_tokens: 4000,
   });
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`MiMo API returned ${response.status}: ${body.slice(0, 200)}`);
-  }
-
-  const data = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) throw new Error("Empty MiMo response");
-
-  // Parse JSON from response (handle markdown code fences)
-  const jsonMatch = content.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("No JSON found in MiMo response");
-
-  const parsed = JSON.parse(jsonMatch[0]) as AnalysisResult;
+  const parsed = aiResult.data;
 
   // Validate and clamp
   if (!DOC_TYPES.includes(parsed.doc_type)) {
@@ -189,7 +166,16 @@ Analiza el documento anterior y devuelve el JSON con la estructura indicada.`;
     cit.status = "CITED_IN_DOCUMENT";
   }
 
-  return parsed;
+  return {
+    result: parsed,
+    aiUsage: {
+      provider: aiResult.provider,
+      model: aiResult.model,
+      tokens: aiResult.usage,
+      cost_usd: aiResult.cost.total_cost,
+      latency_ms: aiResult.latency_ms,
+    },
+  };
 }
 
 /* ── Route handler ── */
@@ -253,17 +239,12 @@ export async function POST(request: NextRequest) {
   }
 
   // 5. Call AI
-  const apiKey = process.env.MIMO_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: "MIMO_API_KEY no configurada en el servidor" },
-      { status: 500 },
-    );
-  }
-
   let analysis: AnalysisResult;
+  let aiUsage: { provider: string; model: string; tokens: unknown; cost_usd: number | null; latency_ms: number };
   try {
-    analysis = await callMimoAnalysis(extracted_text, apiKey);
+    const aiResponse = await callMimoAnalysis(extracted_text, auth.user.userId);
+    analysis = aiResponse.result;
+    aiUsage = aiResponse.aiUsage;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Error desconocido";
     return NextResponse.json(
@@ -302,5 +283,12 @@ export async function POST(request: NextRequest) {
     issue_count: analysis.issues.length,
     argument_count: analysis.arguments.length,
     citation_count: analysis.citations.length,
+    _ai_usage: {
+      provider: aiUsage.provider,
+      model: aiUsage.model,
+      tokens: aiUsage.tokens,
+      cost_usd: aiUsage.cost_usd,
+      latency_ms: aiUsage.latency_ms,
+    },
   });
 }

@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireAuth } from "@/lib/auth/guard";
+import { callAiJson } from "@/lib/ai";
 
 const CENDOJ_API = process.env.CENDOJ_API_URL || "http://127.0.0.1:8000";
 const CENDOJ_TOKEN = process.env.CENDOJ_SERVICE_TOKEN || "";
-const AI_BASE_URL = process.env.AI_BASE_URL || "https://api.openai.com/v1";
-const AI_API_KEY = process.env.AI_API_KEY || "";
-const AI_MODEL = process.env.AI_MODEL || "gpt-4o-mini";
 
 function authHeaders(): Record<string, string> {
   const h: Record<string, string> = {};
@@ -193,12 +192,8 @@ Debes responder EXCLUSIVAMENTE con un JSON válido con esta estructura:
 }`;
 
 export async function POST(req: NextRequest) {
-  if (!AI_API_KEY) {
-    return NextResponse.json(
-      { error: "AI_API_KEY no configurada en el servidor" },
-      { status: 503 }
-    );
-  }
+  const auth = await requireAuth();
+  if (auth.error) return auth.error;
 
   let body: PropositionRequest;
   try {
@@ -227,43 +222,32 @@ export async function POST(req: NextRequest) {
   let searchQueries: string[] = [proposition.trim().slice(0, 100)];
   let legalArea = "";
   let keyConcepts: string[] = [];
+  let extractUsage: { provider: string; model: string; tokens: unknown; cost_usd: number | null; latency_ms: number } | null = null;
 
   try {
-    const extractRes = await fetch(`${AI_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${AI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: AI_MODEL,
-        messages: [
-          { role: "system", content: EXTRACT_TERMS_PROMPT },
-          { role: "user", content: `Proposición: "${proposition.trim()}"` },
-        ],
-        temperature: 0.2,
-        max_tokens: 500,
-        response_format: { type: "json_object" },
-      }),
-      signal: AbortSignal.timeout(30_000),
+    const extractResult = await callAiJson<Record<string, unknown>>({
+      operation_type: "proposition_analysis",
+      user_id: auth.user.userId,
+      system_prompt: EXTRACT_TERMS_PROMPT,
+      user_message: `Proposición: "${proposition.trim()}"`,
+      temperature: 0.2,
+      max_tokens: 500,
     });
 
-    if (extractRes.ok) {
-      const extractData = await extractRes.json();
-      const content = extractData.choices?.[0]?.message?.content;
-      if (content) {
-        try {
-          const parsed = JSON.parse(content);
-          if (Array.isArray(parsed.queries) && parsed.queries.length > 0) {
-            searchQueries = parsed.queries.filter((q: unknown) => typeof q === "string" && q.trim().length > 3).slice(0, 4);
-          }
-          if (parsed.legal_area) legalArea = parsed.legal_area;
-          if (Array.isArray(parsed.key_concepts)) keyConcepts = parsed.key_concepts;
-        } catch {
-          // fallback to default query
-        }
-      }
+    extractUsage = {
+      provider: extractResult.provider,
+      model: extractResult.model,
+      tokens: extractResult.usage,
+      cost_usd: extractResult.cost.total_cost,
+      latency_ms: extractResult.latency_ms,
+    };
+
+    const parsed = extractResult.data;
+    if (Array.isArray(parsed.queries) && parsed.queries.length > 0) {
+      searchQueries = parsed.queries.filter((q: unknown) => typeof q === "string" && q.trim().length > 3).slice(0, 4);
     }
+    if (parsed.legal_area) legalArea = parsed.legal_area as string;
+    if (Array.isArray(parsed.key_concepts)) keyConcepts = parsed.key_concepts as string[];
   } catch {
     // fallback to default query
   }
@@ -357,62 +341,27 @@ ${decisionBlocks.join("\n\n")}`;
     reasoning: string;
     evidence_level: string;
   }> = [];
+  let analysisUsage: { provider: string; model: string; tokens: unknown; cost_usd: number | null; latency_ms: number } | null = null;
 
   try {
-    const aiRes = await fetch(`${AI_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${AI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: AI_MODEL,
-        messages: [
-          { role: "system", content: ANALYSIS_SYSTEM_PROMPT },
-          { role: "user", content: userMessage },
-        ],
-        temperature: 0.3,
-        max_tokens: 4000,
-        response_format: { type: "json_object" },
-      }),
-      signal: AbortSignal.timeout(90_000),
+    const aiResult = await callAiJson<{ analyses?: unknown[] }>({
+      operation_type: "proposition_analysis",
+      user_id: auth.user.userId,
+      system_prompt: ANALYSIS_SYSTEM_PROMPT,
+      user_message: userMessage,
+      temperature: 0.3,
+      max_tokens: 4000,
     });
 
-    if (!aiRes.ok) {
-      const errText = await aiRes.text();
-      console.error("[PROPOSITION] AI API error:", aiRes.status, errText);
-      return NextResponse.json(
-        { error: `Error del servicio AI: HTTP ${aiRes.status}` },
-        { status: 502 }
-      );
-    }
+    analysisUsage = {
+      provider: aiResult.provider,
+      model: aiResult.model,
+      tokens: aiResult.usage,
+      cost_usd: aiResult.cost.total_cost,
+      latency_ms: aiResult.latency_ms,
+    };
 
-    const aiData = await aiRes.json();
-    const content = aiData.choices?.[0]?.message?.content;
-
-    if (!content) {
-      return NextResponse.json(
-        { error: "El servicio AI no devolvió contenido" },
-        { status: 502 }
-      );
-    }
-
-    let parsed: { analyses?: unknown[] };
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      const match = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (match) {
-        parsed = JSON.parse(match[1].trim());
-      } else {
-        return NextResponse.json(
-          { error: "Respuesta AI no es JSON válido" },
-          { status: 502 }
-        );
-      }
-    }
-
-    analyses = Array.isArray(parsed.analyses) ? parsed.analyses as typeof analyses : [];
+    analyses = Array.isArray(aiResult.data.analyses) ? aiResult.data.analyses as typeof analyses : [];
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[PROPOSITION] Error:", msg);
@@ -487,6 +436,7 @@ ${decisionBlocks.join("\n\n")}`;
       ? "Algunas resoluciones solo se analizaron con metadatos. Los resultados pueden ser menos precisos para esas resoluciones."
       : null,
     disclaimer: "Este análisis es orientativo y generado automáticamente por IA. No constituye asesoramiento jurídico ni sustituye el análisis profesional. Las clasificaciones marcadas como 'AI_GENERATED' son generaciones del modelo y no datos verificados directamente del texto judicial.",
+    _ai_usage: [extractUsage, analysisUsage].filter(Boolean),
   };
 
   return NextResponse.json(result);

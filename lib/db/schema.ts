@@ -233,3 +233,22 @@ export const savedDocuments = pgTable("saved_documents", {
   researchSnapshot: jsonb("research_snapshot"), // full research results
   savedAt: timestamp("saved_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+/* ── AI Usage Log — Observabilidad de costes AI ── */
+export const aiUsageLog = pgTable("ai_usage_log", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+  operationType: text("operation_type").notNull(),
+  provider: text("provider").notNull(),
+  model: text("model").notNull(),
+  inputTokens: integer("input_tokens"),
+  cachedInputTokens: integer("cached_input_tokens"),
+  outputTokens: integer("output_tokens"),
+  reasoningTokens: integer("reasoning_tokens"),
+  totalTokens: integer("total_tokens"),
+  costUsd: text("cost_usd"), // stored as string to avoid float precision issues
+  latencyMs: integer("latency_ms"),
+  success: boolean("success").notNull().default(true),
+  errorType: text("error_type"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});

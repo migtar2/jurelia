@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireAuth } from "@/lib/auth/guard";
+import { callAiJson } from "@/lib/ai";
 
 const CENDOJ_API = process.env.CENDOJ_API_URL || "http://127.0.0.1:8000";
 const CENDOJ_TOKEN = process.env.CENDOJ_SERVICE_TOKEN || "";
-const AI_BASE_URL = process.env.AI_BASE_URL || "https://api.openai.com/v1";
-const AI_API_KEY = process.env.AI_API_KEY || "";
-const AI_MODEL = process.env.AI_MODEL || "gpt-4o-mini";
 
 function authHeaders(): Record<string, string> {
   const h: Record<string, string> = {};
@@ -166,12 +165,8 @@ Debes responder EXCLUSIVAMENTE con un JSON válido (sin markdown, sin comentario
 }`;
 
 export async function POST(req: NextRequest) {
-  if (!AI_API_KEY) {
-    return NextResponse.json(
-      { error: "AI_API_KEY no configurada en el servidor" },
-      { status: 503 }
-    );
-  }
+  const auth = await requireAuth();
+  if (auth.error) return auth.error;
 
   let body: CompareRequest;
   try {
@@ -260,59 +255,16 @@ export async function POST(req: NextRequest) {
 
   // Call AI API
   try {
-    const aiRes = await fetch(`${AI_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${AI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: AI_MODEL,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: userMessage },
-        ],
-        temperature: 0.3,
-        max_tokens: 4000,
-        response_format: { type: "json_object" },
-      }),
-      signal: AbortSignal.timeout(90_000),
+    const aiResult = await callAiJson<{ sections?: unknown[]; uncertainty?: string | null }>({
+      operation_type: "judgment_comparison",
+      user_id: auth.user.userId,
+      system_prompt: SYSTEM_PROMPT,
+      user_message: userMessage,
+      temperature: 0.3,
+      max_tokens: 4000,
     });
 
-    if (!aiRes.ok) {
-      const errText = await aiRes.text();
-      console.error("[COMPARE] AI API error:", aiRes.status, errText);
-      return NextResponse.json(
-        { error: `Error del servicio AI: HTTP ${aiRes.status}` },
-        { status: 502 }
-      );
-    }
-
-    const aiData = await aiRes.json();
-    const content = aiData.choices?.[0]?.message?.content;
-
-    if (!content) {
-      return NextResponse.json(
-        { error: "El servicio AI no devolvió contenido" },
-        { status: 502 }
-      );
-    }
-
-    // Parse AI response
-    let parsed: { sections?: unknown[]; uncertainty?: string | null };
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      const match = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (match) {
-        parsed = JSON.parse(match[1].trim());
-      } else {
-        return NextResponse.json(
-          { error: "Respuesta AI no es JSON válido" },
-          { status: 502 }
-        );
-      }
-    }
+    const parsed = aiResult.data;
 
     // Validate sections
     const validKeys = ["legal_issue", "facts", "applicable_rules", "reasoning", "holding", "similarities", "differences", "distinction"];
@@ -358,6 +310,13 @@ export async function POST(req: NextRequest) {
       },
       provenance: "AI_GENERATED" as const,
       uncertainty: parsed.uncertainty || null,
+      _ai_usage: {
+        provider: aiResult.provider,
+        model: aiResult.model,
+        tokens: aiResult.usage,
+        cost_usd: aiResult.cost.total_cost,
+        latency_ms: aiResult.latency_ms,
+      },
     };
 
     return NextResponse.json(result);

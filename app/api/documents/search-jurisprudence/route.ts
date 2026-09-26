@@ -4,10 +4,9 @@ import { db } from "@/lib/db";
 import { documents, documentAnalyses, documentResearchResults } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { cendojSearch, type CendojSearchResult } from "@/lib/cendoj/client";
+import { callAiJson, AiCallCounter } from "@/lib/ai";
 
 /* ── Constants ── */
-const MIMO_API_URL = "https://api.xiaomimimo.com/v1/chat/completions";
-const MIMO_MODEL = "mimo-v2.5-pro";
 const MAX_ISSUES_PER_SEARCH = 5;
 const MAX_CANDIDATES_PER_ISSUE = 5;
 
@@ -88,12 +87,12 @@ function generateBalancedQueries(
   return { supporting, contrary };
 }
 
-/* ── Classify relationship via MiMo ── */
+/* ── Classify relationship via centralized AI client ── */
 async function classifyRelationship(
-  apiKey: string,
   issueText: string,
   relatedArguments: string[],
   candidate: CendojSearchResult,
+  counter: AiCallCounter,
 ): Promise<ClassificationResult> {
   const systemPrompt = `Eres un asistente jurídico experto. Clasifica la relación entre una cuestión jurídica/argumento y una resolución judicial encontrada.
 
@@ -148,41 +147,19 @@ Nivel de datos disponible: ${evidenceLevel}
 Clasifica la relación. Responde SOLO con JSON válido.`;
 
   try {
-    const response = await fetch(MIMO_API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: MIMO_MODEL,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        temperature: 0.1,
-        max_tokens: 300,
-      }),
+    // Safety check: count this AI call
+    counter.tryCall();
+
+    const aiResult = await callAiJson<ClassificationResult>({
+      operation_type: "jurisprudence_classification",
+      provider: "mimo",
+      system_prompt: systemPrompt,
+      user_message: userPrompt,
+      temperature: 0.1,
+      max_tokens: 300,
     });
 
-    if (!response.ok) {
-      return { relationship: "INSUFFICIENT_EVIDENCE", reason: "Error al clasificar", evidence_basis: evidenceLevel };
-    }
-
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) {
-      return { relationship: "INSUFFICIENT_EVIDENCE", reason: "Respuesta vacía", evidence_basis: evidenceLevel };
-    }
-
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      return { relationship: "INSUFFICIENT_EVIDENCE", reason: "Sin JSON válido", evidence_basis: evidenceLevel };
-    }
-
-    const parsed = JSON.parse(jsonMatch[0]) as ClassificationResult;
+    const parsed = aiResult.data;
 
     // Validate relationship
     const validRelationships: Relationship[] = ["SUPPORTS", "CONTRADICTS", "DISTINGUISHES", "NEUTRAL", "INSUFFICIENT_EVIDENCE"];
@@ -191,7 +168,7 @@ Clasifica la relación. Responde SOLO con JSON válido.`;
     }
 
     // Override evidence basis based on available data
-    parsed.evidence_basis = evidenceLevel;
+    parsed.evidence_basis = evidenceLevel as EvidenceBasis;
 
     // Clamp reason
     if (parsed.reason && parsed.reason.length > 500) {
@@ -200,7 +177,7 @@ Clasifica la relación. Responde SOLO con JSON válido.`;
 
     return parsed;
   } catch {
-    return { relationship: "INSUFFICIENT_EVIDENCE", reason: "Error de clasificación", evidence_basis: evidenceLevel };
+    return { relationship: "INSUFFICIENT_EVIDENCE", reason: "Error de clasificación", evidence_basis: evidenceLevel as EvidenceBasis };
   }
 }
 
@@ -353,11 +330,8 @@ export async function POST(request: NextRequest) {
     .map((c) => c.normalized)
     .slice(0, 3);
 
-  // 7. API key check
-  const apiKey = process.env.MIMO_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json({ error: "MIMO_API_KEY no configurada" }, { status: 500 });
-  }
+  // 7. Initialize AI safety counter
+  const aiCounter = new AiCallCounter(Date.now().toString());
 
   // 8. For each issue: generate balanced queries, search CENDOJ, classify
   const allResults: IssueResult[] = [];
@@ -401,7 +375,7 @@ export async function POST(request: NextRequest) {
 
     for (const [, candidate] of candidateMap) {
       const aiStart = Date.now();
-      const classification = await classifyRelationship(apiKey, iss.issue, relatedArgTexts, candidate);
+      const classification = await classifyRelationship(iss.issue, relatedArgTexts, candidate, aiCounter);
       totalAiMs += Date.now() - aiStart;
 
       issueCandidates.push({
@@ -465,6 +439,7 @@ export async function POST(request: NextRequest) {
       ai_ms: totalAiMs,
       issues_searched: targetIssues.length,
       candidates_found: allResults.reduce((sum, r) => sum + r.candidates.length, 0),
+      ai_calls_made: aiCounter.getCount(),
     },
   });
 }
