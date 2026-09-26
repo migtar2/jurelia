@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { requireAuth } from "@/lib/auth/guard";
 import { callAiJson } from "@/lib/ai";
+import { withQuota, getCommercialCategory } from "@/lib/quota";
 import { validateUrl, fetchArticle } from "@/lib/news/fetch-article";
 import { extractArticle } from "@/lib/news/extract-article";
 import { extractLegalMetadata } from "@/lib/news/extract-legal-metadata";
@@ -308,7 +309,8 @@ export async function POST(req: NextRequest) {
         ? "OFFICIAL_SUMMARY"
         : "METADATA_ONLY";
 
-  // ── Step 4: Extract claims from article ──
+  // ── Steps 4+5: Extract claims + Compare (one quota unit) ──
+  const category = getCommercialCategory("news_comparison");
   const articleText = analysis.article.article_text.slice(0, 12000);
   const articleContext = [
     `Título: ${analysis.article.title || "—"}`,
@@ -320,39 +322,6 @@ export async function POST(req: NextRequest) {
     "--- FIN DEL ARTÍCULO ---",
   ].join("\n");
 
-  let claims: ExtractedClaim[];
-  let claimsAiUsage: { provider: string; model: string; tokens: unknown; cost_usd: number | null; latency_ms: number } | null = null;
-  try {
-    const claimsResult = await callAI(
-      CLAIM_EXTRACTION_PROMPT,
-      articleContext,
-      "news_claim_extraction",
-      auth.user.userId,
-      2000
-    );
-
-    claimsAiUsage = claimsResult.aiUsage;
-    const parsed = claimsResult.data as { claims?: unknown[] };
-
-    claims = Array.isArray(parsed.claims)
-      ? (parsed.claims as Record<string, unknown>[]).map((c, i) => ({
-          id: (c.id as string) || `c${i + 1}`,
-          text: (c.text as string) || "",
-          type: (["holding", "factual", "procedural", "opinion"].includes(c.type as string)
-            ? c.type
-            : "factual") as ExtractedClaim["type"],
-          confidence: typeof c.confidence === "number" ? Math.max(0, Math.min(1, c.confidence)) : 0.5,
-          status: "CANNOT_VERIFY" as const,
-          evidence: "",
-          provenance: "AI_GENERATED" as const,
-        }))
-      : [];
-  } catch (err: unknown) {
-    console.error("[NEWS_COMPARE] Claim extraction error:", err);
-    claims = [];
-  }
-
-  // ── Step 5: Compare claims against official data ──
   const MAX_CHARS = 12000;
   const officialBlock = [
     `=== DATOS OFICIALES DE LA RESOLUCIÓN (fuente: CENDOJ) ===`,
@@ -374,32 +343,73 @@ export async function POST(req: NextRequest) {
     ? `--- TEXTO OFICIAL (${decisionTextResult.source === "pdf" ? "PDF completo" : "Resumen oficial"}) ---\n${decisionTextResult.text.slice(0, MAX_CHARS)}\n--- FIN DEL TEXTO OFICIAL ---`
     : "[NO HAY TEXTO OFICIAL DISPONIBLE — Solo metadatos]";
 
-  const claimsBlock = claims.length > 0
-    ? `=== AFIRMACIONES EXTRAÍDAS DEL ARTÍCULO ===\n${claims.map((c) => `[${c.id}] (${c.type}, confianza: ${c.confidence}) ${c.text}`).join("\n")}`
-    : "[No se extrajeron afirmaciones específicas]";
+  const quotaResult = await withQuota(auth.user.userId, category, async () => {
+    // Step 4: Extract claims
+    let claims: ExtractedClaim[];
+    let claimsAiUsage: { provider: string; model: string; tokens: unknown; cost_usd: number | null; latency_ms: number } | null = null;
+    try {
+      const claimsResult = await callAI(
+        CLAIM_EXTRACTION_PROMPT,
+        articleContext,
+        "news_claim_extraction",
+        auth.user.userId,
+        2000
+      );
 
-  const comparisonUserMessage = [
-    `Base del análisis: ${analysisBasis}`,
-    "",
-    officialBlock,
-    officialTextSection,
-    "",
-    claimsBlock,
-  ].join("\n");
+      claimsAiUsage = claimsResult.aiUsage;
+      const parsed = claimsResult.data as { claims?: unknown[] };
 
-  let comparisonData: Record<string, unknown>;
-  let comparisonAiUsage: { provider: string; model: string; tokens: unknown; cost_usd: number | null; latency_ms: number } | null = null;
-  try {
+      claims = Array.isArray(parsed.claims)
+        ? (parsed.claims as Record<string, unknown>[]).map((c, i) => ({
+            id: (c.id as string) || `c${i + 1}`,
+            text: (c.text as string) || "",
+            type: (["holding", "factual", "procedural", "opinion"].includes(c.type as string)
+              ? c.type
+              : "factual") as ExtractedClaim["type"],
+            confidence: typeof c.confidence === "number" ? Math.max(0, Math.min(1, c.confidence)) : 0.5,
+            status: "CANNOT_VERIFY" as const,
+            evidence: "",
+            provenance: "AI_GENERATED" as const,
+          }))
+        : [];
+    } catch (err: unknown) {
+      console.error("[NEWS_COMPARE] Claim extraction error:", err);
+      claims = [];
+    }
+
+    // Step 5: Compare claims
+    const claimsBlock = claims.length > 0
+      ? `=== AFIRMACIONES EXTRAÍDAS DEL ARTÍCULO ===\n${claims.map((c) => `[${c.id}] (${c.type}, confianza: ${c.confidence}) ${c.text}`).join("\n")}`
+      : "[No se extrajeron afirmaciones específicas]";
+
+    const comparisonUserMessage = [
+      `Base del análisis: ${analysisBasis}`,
+      "",
+      officialBlock,
+      officialTextSection,
+      "",
+      claimsBlock,
+    ].join("\n");
+
     const comparisonResult = await callAI(COMPARISON_PROMPT, comparisonUserMessage, "news_comparison", auth.user.userId, 4000);
-    comparisonData = comparisonResult.data;
-    comparisonAiUsage = comparisonResult.aiUsage;
-  } catch (err: unknown) {
-    console.error("[NEWS_COMPARE] Comparison error:", err);
+
+    return {
+      claims,
+      claimsAiUsage,
+      comparisonData: comparisonResult.data,
+      comparisonAiUsage: comparisonResult.aiUsage,
+    };
+  });
+
+  if ("error" in quotaResult) {
     return NextResponse.json(
-      { error: `Error generando comparación: ${err instanceof Error ? err.message : String(err)}` },
-      { status: 502 }
+      { error: "QUOTA_EXCEEDED", category: quotaResult.quota.category, used: quotaResult.quota.used, limit: quotaResult.quota.limit, remaining: quotaResult.quota.remaining, period_end: quotaResult.quota.period_end },
+      { status: 429 }
     );
   }
+
+  const { result: aiResults, quota } = quotaResult;
+  const { claims, claimsAiUsage, comparisonData, comparisonAiUsage } = aiResults;
 
   // ── Step 6: Merge AI comparison results with claims ──
   const claimResults = Array.isArray(comparisonData.claim_results)
@@ -477,5 +487,6 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     ...result,
     _ai_usage: [claimsAiUsage, comparisonAiUsage].filter(Boolean),
+    _quota: { category: quota.category, used: quota.used, limit: quota.limit, remaining: quota.remaining, period_end: quota.period_end },
   });
 }

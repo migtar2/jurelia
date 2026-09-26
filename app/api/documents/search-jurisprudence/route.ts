@@ -5,6 +5,7 @@ import { documents, documentAnalyses, documentResearchResults } from "@/lib/db/s
 import { eq, and } from "drizzle-orm";
 import { cendojSearch, type CendojSearchResult } from "@/lib/cendoj/client";
 import { callAiJson, AiCallCounter } from "@/lib/ai";
+import { withQuota, getCommercialCategory } from "@/lib/quota";
 
 /* ── Constants ── */
 const MAX_ISSUES_PER_SEARCH = 5;
@@ -333,78 +334,92 @@ export async function POST(request: NextRequest) {
   // 7. Initialize AI safety counter
   const aiCounter = new AiCallCounter(Date.now().toString());
 
-  // 8. For each issue: generate balanced queries, search CENDOJ, classify
-  const allResults: IssueResult[] = [];
-  const resultsByIssue = new Map<string, IssueResult["candidates"]>();
-  let totalRetrievalMs = 0;
-  let totalAiMs = 0;
+  // 8. For each issue: generate balanced queries, search CENDOJ, classify (quota-enforced)
+  const category = getCommercialCategory("jurisprudence_classification");
+  const quotaResult = await withQuota(auth.user.userId, category, async () => {
+    const allResults: IssueResult[] = [];
+    const resultsByIssue = new Map<string, IssueResult["candidates"]>();
+    let totalRetrievalMs = 0;
+    let totalAiMs = 0;
 
-  for (const iss of targetIssues) {
-    const relatedArgs = argumentsList.filter((a) => a.related_issue === iss.issue);
-    const relatedArgTexts = relatedArgs.map((a) => a.argument);
+    for (const iss of targetIssues) {
+      const relatedArgs = argumentsList.filter((a) => a.related_issue === iss.issue);
+      const relatedArgTexts = relatedArgs.map((a) => a.argument);
 
-    // Generate balanced queries
-    const queries = generateBalancedQueries(iss.issue, relatedArgs, citedLaws);
+      // Generate balanced queries
+      const queries = generateBalancedQueries(iss.issue, relatedArgs, citedLaws);
 
-    // Collect unique candidates from all query types
-    const candidateMap = new Map<string, CendojSearchResult>();
-    const queryTypes: Array<"supporting" | "contrary"> = ["supporting", "contrary"];
+      // Collect unique candidates from all query types
+      const candidateMap = new Map<string, CendojSearchResult>();
+      const queryTypes: Array<"supporting" | "contrary"> = ["supporting", "contrary"];
 
-    for (const qtype of queryTypes) {
-      const queryList = queries[qtype];
-      for (const params of queryList) {
-        try {
-          const retrievalStart = Date.now();
-          const response = await cendojSearch(params);
-          totalRetrievalMs += Date.now() - retrievalStart;
+      for (const qtype of queryTypes) {
+        const queryList = queries[qtype];
+        for (const params of queryList) {
+          try {
+            const retrievalStart = Date.now();
+            const response = await cendojSearch(params);
+            totalRetrievalMs += Date.now() - retrievalStart;
 
-          for (const result of response.results.slice(0, MAX_CANDIDATES_PER_ISSUE)) {
-            const key = result.roj || result.id || `${result.titulo}_${result.fecha}`;
-            if (!candidateMap.has(key)) {
-              candidateMap.set(key, result);
+            for (const result of response.results.slice(0, MAX_CANDIDATES_PER_ISSUE)) {
+              const key = result.roj || result.id || `${result.titulo}_${result.fecha}`;
+              if (!candidateMap.has(key)) {
+                candidateMap.set(key, result);
+              }
             }
+          } catch {
+            // Continue on individual search failure
           }
-        } catch {
-          // Continue on individual search failure
         }
       }
-    }
 
-    // Classify each candidate
-    const issueCandidates: IssueResult["candidates"] = [];
+      // Classify each candidate
+      const issueCandidates: IssueResult["candidates"] = [];
 
-    for (const [, candidate] of candidateMap) {
-      const aiStart = Date.now();
-      const classification = await classifyRelationship(iss.issue, relatedArgTexts, candidate, aiCounter);
-      totalAiMs += Date.now() - aiStart;
+      for (const [, candidate] of candidateMap) {
+        const aiStart = Date.now();
+        const classification = await classifyRelationship(iss.issue, relatedArgTexts, candidate, aiCounter);
+        totalAiMs += Date.now() - aiStart;
 
-      issueCandidates.push({
-        decision_roj: candidate.roj || null,
-        decision_ecli: candidate.ecli || null,
-        organo: candidate.organo || null,
-        fecha: candidate.fecha || null,
-        titulo: candidate.titulo || null,
-        resumen: candidate.resumen || null,
-        relationship: classification.relationship,
-        reason: classification.reason,
-        evidence_basis: classification.evidence_basis,
-        source_url: candidate.url_pdf || "",
+        issueCandidates.push({
+          decision_roj: candidate.roj || null,
+          decision_ecli: candidate.ecli || null,
+          organo: candidate.organo || null,
+          fecha: candidate.fecha || null,
+          titulo: candidate.titulo || null,
+          resumen: candidate.resumen || null,
+          relationship: classification.relationship,
+          reason: classification.reason,
+          evidence_basis: classification.evidence_basis,
+          source_url: candidate.url_pdf || "",
+        });
+      }
+
+      allResults.push({
+        issue_text: iss.issue,
+        candidates: issueCandidates,
       });
+
+      resultsByIssue.set(iss.issue, issueCandidates);
     }
 
-    allResults.push({
-      issue_text: iss.issue,
-      candidates: issueCandidates,
-    });
+    // 9. Gap analysis
+    const gapAnalysis = generateGapAnalysis(issues, citationsList, resultsByIssue);
 
-    resultsByIssue.set(iss.issue, issueCandidates);
+    return { allResults, gapAnalysis, totalRetrievalMs, totalAiMs };
+  });
+
+  if ("error" in quotaResult) {
+    return NextResponse.json(
+      { error: "QUOTA_EXCEEDED", category: quotaResult.quota.category, used: quotaResult.quota.used, limit: quotaResult.quota.limit, remaining: quotaResult.quota.remaining, period_end: quotaResult.quota.period_end },
+      { status: 429 }
+    );
   }
 
-  // 9. Gap analysis
-  const gapAnalysis = generateGapAnalysis(issues, citationsList, resultsByIssue);
+  const { result: opResult, quota } = quotaResult;
 
   // 10. Persist results
-  const insertValues = allResults.flatMap((ir) =>
+  const insertValues = opResult.allResults.flatMap((ir) =>
     ir.candidates.map((c) => ({
       documentId: document_id,
       analysisId: analysis_id,
@@ -431,15 +446,16 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({
     document_id,
     analysis_id,
-    results: allResults,
-    gap_analysis: gapAnalysis,
+    results: opResult.allResults,
+    gap_analysis: opResult.gapAnalysis,
     performance: {
       total_ms: totalMs,
-      retrieval_ms: totalRetrievalMs,
-      ai_ms: totalAiMs,
+      retrieval_ms: opResult.totalRetrievalMs,
+      ai_ms: opResult.totalAiMs,
       issues_searched: targetIssues.length,
-      candidates_found: allResults.reduce((sum, r) => sum + r.candidates.length, 0),
+      candidates_found: opResult.allResults.reduce((sum, r) => sum + r.candidates.length, 0),
       ai_calls_made: aiCounter.getCount(),
     },
+    _quota: { category: quota.category, used: quota.used, limit: quota.limit, remaining: quota.remaining, period_end: quota.period_end },
   });
 }

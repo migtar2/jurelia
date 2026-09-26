@@ -96,7 +96,7 @@ export async function reserveQuota(
     };
   }
 
-  // Atomic check + reserve via transaction
+  // Atomic check + reserve via PL/pgSQL function
   // First: reconcile any zombie reservations (inline cleanup)
   try {
     await reconcileZombieReservations();
@@ -104,62 +104,25 @@ export async function reserveQuota(
     // Non-fatal: log but don't block the reservation
   }
 
-  const result = await db.transaction(async (tx) => {
-    // Lock on a deterministic key to serialize concurrent requests
-    const lockKey = hashCode(`${userId}:${category}:${period.period_start.toISOString()}`);
+  // Use the PL/pgSQL function which handles advisory lock + count + insert atomically
+  const result = await db.execute(
+    sql`SELECT reserve_quota_atomic(${userId}::uuid, ${category}, ${period.period_start.toISOString()}::timestamptz, ${limit}) as id`
+  );
+  const reservationId = result.rows[0]?.id as string | null;
 
-    // Advisory lock (non-blocking if already locked = another request is in flight)
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(${lockKey})`);
-
-    // Count current usage (committed + reserved)
-    const [countResult] = await tx
-      .select({
-        count: sql<number>`count(*)::int`,
-      })
-      .from(usageReservations)
-      .where(
-        and(
-          eq(usageReservations.userId, userId),
-          eq(usageReservations.category, category),
-          gte(usageReservations.createdAt, period.period_start),
-          lt(usageReservations.createdAt, period.period_end),
-          sql`${usageReservations.state} IN ('reserved', 'committed')`
-        )
-      );
-
-    const currentUsage = countResult?.count ?? 0;
-
-    if (currentUsage >= limit) {
-      return {
-        allowed: false,
-        reservation_id: undefined,
-        currentUsage,
-      };
-    }
-
-    // Insert reservation
-    const [reservation] = await tx
-      .insert(usageReservations)
-      .values({
-        userId,
-        category,
-        periodStart: period.period_start,
-        state: "reserved",
-      })
-      .returning({ id: usageReservations.id });
-
+  if (!reservationId) {
     return {
-      allowed: true,
-      reservation_id: reservation.id,
-      currentUsage: currentUsage + 1,
+      allowed: false,
+      reservation_id: undefined,
+      quota_status: await getQuotaStatus(userId, category, plan),
+      reason: "QUOTA_EXCEEDED",
     };
-  });
+  }
 
   return {
-    allowed: result.allowed,
-    reservation_id: result.reservation_id,
+    allowed: true,
+    reservation_id: reservationId,
     quota_status: await getQuotaStatus(userId, category, plan),
-    reason: result.allowed ? undefined : "QUOTA_EXCEEDED",
   };
 }
 
@@ -274,16 +237,4 @@ async function countByState(userId: string, category: CommercialCategory, start:
       )
     );
   return result?.count ?? 0;
-}
-
-/**
- * Hash function for advisory lock key (deterministic, fits in bigint).
- */
-function hashCode(str: string): number {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash + char) | 0;
-  }
-  return Math.abs(hash);
 }

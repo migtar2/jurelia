@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth/guard";
 import { callAiJson } from "@/lib/ai";
+import { withQuota, getCommercialCategory } from "@/lib/quota";
 
 const CENDOJ_API = process.env.CENDOJ_API_URL || "http://127.0.0.1:8000";
 const CENDOJ_TOKEN = process.env.CENDOJ_SERVICE_TOKEN || "";
@@ -218,112 +219,117 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  /* ── Step 1: Extract search terms via AI ── */
-  let searchQueries: string[] = [proposition.trim().slice(0, 100)];
-  let legalArea = "";
-  let keyConcepts: string[] = [];
-  let extractUsage: { provider: string; model: string; tokens: unknown; cost_usd: number | null; latency_ms: number } | null = null;
+  /* ── Steps 1–6 wrapped as one quota unit (2 AI calls) ── */
+  const category = getCommercialCategory("proposition_analysis");
 
-  try {
-    const extractResult = await callAiJson<Record<string, unknown>>({
-      operation_type: "proposition_analysis",
-      user_id: auth.user.userId,
-      system_prompt: EXTRACT_TERMS_PROMPT,
-      user_message: `Proposición: "${proposition.trim()}"`,
-      temperature: 0.2,
-      max_tokens: 500,
-    });
+  const quotaResult = await withQuota(auth.user.userId, category, async () => {
+    /* ── Step 1: Extract search terms via AI ── */
+    let searchQueries: string[] = [proposition.trim().slice(0, 100)];
+    let legalArea = "";
+    let keyConcepts: string[] = [];
+    let extractUsage: { provider: string; model: string; tokens: unknown; cost_usd: number | null; latency_ms: number } | null = null;
 
-    extractUsage = {
-      provider: extractResult.provider,
-      model: extractResult.model,
-      tokens: extractResult.usage,
-      cost_usd: extractResult.cost.total_cost,
-      latency_ms: extractResult.latency_ms,
-    };
+    try {
+      const extractResult = await callAiJson<Record<string, unknown>>({
+        operation_type: "proposition_analysis",
+        user_id: auth.user.userId,
+        system_prompt: EXTRACT_TERMS_PROMPT,
+        user_message: `Proposición: "${proposition.trim()}"`,
+        temperature: 0.2,
+        max_tokens: 500,
+      });
 
-    const parsed = extractResult.data;
-    if (Array.isArray(parsed.queries) && parsed.queries.length > 0) {
-      searchQueries = parsed.queries.filter((q: unknown) => typeof q === "string" && q.trim().length > 3).slice(0, 4);
+      extractUsage = {
+        provider: extractResult.provider,
+        model: extractResult.model,
+        tokens: extractResult.usage,
+        cost_usd: extractResult.cost.total_cost,
+        latency_ms: extractResult.latency_ms,
+      };
+
+      const parsed = extractResult.data;
+      if (Array.isArray(parsed.queries) && parsed.queries.length > 0) {
+        searchQueries = parsed.queries.filter((q: unknown) => typeof q === "string" && q.trim().length > 3).slice(0, 4);
+      }
+      if (parsed.legal_area) legalArea = parsed.legal_area as string;
+      if (Array.isArray(parsed.key_concepts)) keyConcepts = parsed.key_concepts as string[];
+    } catch {
+      // fallback to default query
     }
-    if (parsed.legal_area) legalArea = parsed.legal_area as string;
-    if (Array.isArray(parsed.key_concepts)) keyConcepts = parsed.key_concepts as string[];
-  } catch {
-    // fallback to default query
-  }
 
-  /* ── Step 2: Search CENDOJ with multiple queries ── */
-  const seenIds = new Set<string>();
-  const allResults: CendojSearchResult[] = [];
+    /* ── Step 2: Search CENDOJ with multiple queries ── */
+    const seenIds = new Set<string>();
+    const allResults: CendojSearchResult[] = [];
 
-  // Search with the top 2 queries in parallel
-  const queriesToSearch = searchQueries.slice(0, 2);
-  const searchResults = await Promise.all(
-    queriesToSearch.map(q => searchCendoj(q, court_filter, date_from, date_to))
-  );
+    // Search with the top 2 queries in parallel
+    const queriesToSearch = searchQueries.slice(0, 2);
+    const searchResults = await Promise.all(
+      queriesToSearch.map(q => searchCendoj(q, court_filter, date_from, date_to))
+    );
 
-  for (const results of searchResults) {
-    for (const r of results) {
-      const key = r.roj || r.id;
-      if (!seenIds.has(key)) {
-        seenIds.add(key);
-        allResults.push(r);
+    for (const results of searchResults) {
+      for (const r of results) {
+        const key = r.roj || r.id;
+        if (!seenIds.has(key)) {
+          seenIds.add(key);
+          allResults.push(r);
+        }
       }
     }
-  }
 
-  // Limit to 10 decisions to keep analysis manageable
-  const decisionsToAnalyze = allResults.slice(0, 10);
+    // Limit to 10 decisions to keep analysis manageable
+    const decisionsToAnalyze = allResults.slice(0, 10);
 
-  if (decisionsToAnalyze.length === 0) {
-    return NextResponse.json({
-      proposition: proposition.trim(),
-      search_query_used: searchQueries.join(" | "),
-      total_decisions_found: 0,
-      total_analyzed: 0,
-      supporting: [],
-      contradicting: [],
-      distinguishing: [],
-      neutral: [],
-      insufficient_evidence: [],
-      provenance: "AI_GENERATED",
-      uncertainty: "No se encontraron resoluciones relacionadas con esta proposición. Intente reformular la proposición o ampliar los filtros.",
-      disclaimer: "Los resultados son orientativos y generados automáticamente por IA. No constituyen asesoramiento jurídico.",
-    });
-  }
-
-  /* ── Step 3: Fetch texts for all decisions in parallel ── */
-  const texts = await Promise.all(decisionsToAnalyze.map(fetchDecisionText));
-
-  /* ── Step 4: Build analysis context ── */
-  const MAX_CHARS = 8000;
-  const decisionBlocks = decisionsToAnalyze.map((d, i) => {
-    const t = texts[i];
-    const lines: string[] = [];
-    lines.push(`=== RESOLUCIÓN [${i}] ===`);
-    lines.push(`Título: ${d.titulo}`);
-    if (d.organo) lines.push(`Órgano: ${d.organo}`);
-    if (d.sede) lines.push(`Sede: ${d.sede}`);
-    if (d.roj) lines.push(`ROJ: ${d.roj}`);
-    if (d.ecli) lines.push(`ECLI: ${d.ecli}`);
-    if (d.fecha) lines.push(`Fecha: ${d.fecha}`);
-    if (d.ponente) lines.push(`Ponente: ${d.ponente}`);
-    if (d.n_recurso) lines.push(`Nº Recurso: ${d.n_recurso}`);
-    lines.push(`Nivel de evidencia: ${t.source === "pdf" ? "FULL_TEXT" : t.source === "resumen" ? "OFFICIAL_SUMMARY" : "METADATA_ONLY"}`);
-
-    if (t.text) {
-      const truncated = t.text.length > MAX_CHARS;
-      lines.push(`\n--- TEXTO (${t.source === "pdf" ? "PDF completo" : "Resumen oficial"}) ---`);
-      lines.push(t.text.slice(0, MAX_CHARS));
-      if (truncated) lines.push("[...TEXTO TRUNCADO...]");
-      lines.push("--- FIN DEL TEXTO ---");
-    } else {
-      lines.push(`\n[NO HAY TEXTO DISPONIBLE — Solo metadatos]`);
+    if (decisionsToAnalyze.length === 0) {
+      return {
+        proposition: proposition.trim(),
+        search_query_used: searchQueries.join(" | "),
+        total_decisions_found: 0,
+        total_analyzed: 0,
+        supporting: [],
+        contradicting: [],
+        distinguishing: [],
+        neutral: [],
+        insufficient_evidence: [],
+        provenance: "AI_GENERATED",
+        uncertainty: "No se encontraron resoluciones relacionadas con esta proposición. Intente reformular la proposición o ampliar los filtros.",
+        disclaimer: "Los resultados son orientativos y generados automáticamente por IA. No constituyen asesoramiento jurídico.",
+        _ai_usage: [] as unknown[],
+      };
     }
-    return lines.join("\n");
-  });
 
-  const userMessage = `PROPOSICIÓN JURÍDICA: "${proposition.trim()}"
+    /* ── Step 3: Fetch texts for all decisions in parallel ── */
+    const texts = await Promise.all(decisionsToAnalyze.map(fetchDecisionText));
+
+    /* ── Step 4: Build analysis context ── */
+    const MAX_CHARS = 8000;
+    const decisionBlocks = decisionsToAnalyze.map((d, i) => {
+      const t = texts[i];
+      const lines: string[] = [];
+      lines.push(`=== RESOLUCIÓN [${i}] ===`);
+      lines.push(`Título: ${d.titulo}`);
+      if (d.organo) lines.push(`Órgano: ${d.organo}`);
+      if (d.sede) lines.push(`Sede: ${d.sede}`);
+      if (d.roj) lines.push(`ROJ: ${d.roj}`);
+      if (d.ecli) lines.push(`ECLI: ${d.ecli}`);
+      if (d.fecha) lines.push(`Fecha: ${d.fecha}`);
+      if (d.ponente) lines.push(`Ponente: ${d.ponente}`);
+      if (d.n_recurso) lines.push(`Nº Recurso: ${d.n_recurso}`);
+      lines.push(`Nivel de evidencia: ${t.source === "pdf" ? "FULL_TEXT" : t.source === "resumen" ? "OFFICIAL_SUMMARY" : "METADATA_ONLY"}`);
+
+      if (t.text) {
+        const truncated = t.text.length > MAX_CHARS;
+        lines.push(`\n--- TEXTO (${t.source === "pdf" ? "PDF completo" : "Resumen oficial"}) ---`);
+        lines.push(t.text.slice(0, MAX_CHARS));
+        if (truncated) lines.push("[...TEXTO TRUNCADO...]");
+        lines.push("--- FIN DEL TEXTO ---");
+      } else {
+        lines.push(`\n[NO HAY TEXTO DISPONIBLE — Solo metadatos]`);
+      }
+      return lines.join("\n");
+    });
+
+    const userMessage = `PROPOSICIÓN JURÍDICA: "${proposition.trim()}"
 ${legalArea ? `Área del derecho: ${legalArea}` : ""}
 ${keyConcepts.length > 0 ? `Conceptos clave: ${keyConcepts.join(", ")}` : ""}
 
@@ -333,17 +339,16 @@ SÉ OBJETIVO: busca activamente evidencia CONTRARIA, no solo favorable.
 
 ${decisionBlocks.join("\n\n")}`;
 
-  /* ── Step 5: Call AI for analysis ── */
-  let analyses: Array<{
-    index: number;
-    relationship: RelationshipType;
-    evidence_basis: string;
-    reasoning: string;
-    evidence_level: string;
-  }> = [];
-  let analysisUsage: { provider: string; model: string; tokens: unknown; cost_usd: number | null; latency_ms: number } | null = null;
+    /* ── Step 5: Call AI for analysis ── */
+    let analyses: Array<{
+      index: number;
+      relationship: RelationshipType;
+      evidence_basis: string;
+      reasoning: string;
+      evidence_level: string;
+    }> = [];
+    let analysisUsage: { provider: string; model: string; tokens: unknown; cost_usd: number | null; latency_ms: number } | null = null;
 
-  try {
     const aiResult = await callAiJson<{ analyses?: unknown[] }>({
       operation_type: "proposition_analysis",
       user_id: auth.user.userId,
@@ -362,82 +367,86 @@ ${decisionBlocks.join("\n\n")}`;
     };
 
     analyses = Array.isArray(aiResult.data.analyses) ? aiResult.data.analyses as typeof analyses : [];
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[PROPOSITION] Error:", msg);
-    return NextResponse.json(
-      { error: `Error generando análisis: ${msg}` },
-      { status: 502 }
-    );
-  }
 
-  /* ── Step 6: Build structured result ── */
-  const validRelationships = ["SUPPORTS", "CONTRADICTS", "DISTINGUISHES", "NEUTRAL", "INSUFFICIENT_EVIDENCE"];
+    /* ── Step 6: Build structured result ── */
+    const validRelationships = ["SUPPORTS", "CONTRADICTS", "DISTINGUISHES", "NEUTRAL", "INSUFFICIENT_EVIDENCE"];
 
-  const analyzedDecisions: AnalyzedDecision[] = decisionsToAnalyze.map((d, i) => {
-    const analysis = analyses.find((a: { index?: number }) => a.index === i);
-    const t = texts[i];
-    const evidenceLevel = t.source === "pdf" ? "FULL_TEXT" : t.source === "resumen" ? "OFFICIAL_SUMMARY" : "METADATA_ONLY";
+    const analyzedDecisions: AnalyzedDecision[] = decisionsToAnalyze.map((d, i) => {
+      const analysis = analyses.find((a: { index?: number }) => a.index === i);
+      const t = texts[i];
+      const evidenceLevel = t.source === "pdf" ? "FULL_TEXT" : t.source === "resumen" ? "OFFICIAL_SUMMARY" : "METADATA_ONLY";
 
-    let relationship: RelationshipType = "INSUFFICIENT_EVIDENCE";
-    let evidence_basis = "No se pudo determinar la relación";
-    let reasoning = "Análisis no disponible";
-    let evLevel = evidenceLevel;
+      let relationship: RelationshipType = "INSUFFICIENT_EVIDENCE";
+      let evidence_basis = "No se pudo determinar la relación";
+      let reasoning = "Análisis no disponible";
+      let evLevel = evidenceLevel;
 
-    if (analysis) {
-      if (validRelationships.includes(analysis.relationship)) {
-        relationship = analysis.relationship as RelationshipType;
+      if (analysis) {
+        if (validRelationships.includes(analysis.relationship)) {
+          relationship = analysis.relationship as RelationshipType;
+        }
+        evidence_basis = analysis.evidence_basis || evidence_basis;
+        reasoning = analysis.reasoning || reasoning;
+        if (["FULL_TEXT", "OFFICIAL_SUMMARY", "METADATA_ONLY"].includes(analysis.evidence_level)) {
+          evLevel = analysis.evidence_level;
+        }
       }
-      evidence_basis = analysis.evidence_basis || evidence_basis;
-      reasoning = analysis.reasoning || reasoning;
-      if (["FULL_TEXT", "OFFICIAL_SUMMARY", "METADATA_ONLY"].includes(analysis.evidence_level)) {
-        evLevel = analysis.evidence_level;
-      }
-    }
+
+      return {
+        roj: d.roj || "",
+        ecli: d.ecli,
+        organo: d.organo,
+        fecha: d.fecha,
+        titulo: d.titulo,
+        ponente: d.ponente,
+        url_pdf: d.url_pdf,
+        resumen: d.resumen,
+        n_recurso: d.n_recurso,
+        n_resolucion: d.n_resolucion,
+        sede: d.sede,
+        relationship,
+        evidence_basis,
+        reasoning,
+        evidence_level: evLevel as AnalyzedDecision["evidence_level"],
+        provenance: "AI_GENERATED" as const,
+      };
+    });
+
+    const supporting = analyzedDecisions.filter(d => d.relationship === "SUPPORTS");
+    const contradicting = analyzedDecisions.filter(d => d.relationship === "CONTRADICTS");
+    const distinguishing = analyzedDecisions.filter(d => d.relationship === "DISTINGUISHES");
+    const neutral = analyzedDecisions.filter(d => d.relationship === "NEUTRAL");
+    const insufficient = analyzedDecisions.filter(d => d.relationship === "INSUFFICIENT_EVIDENCE");
 
     return {
-      roj: d.roj || "",
-      ecli: d.ecli,
-      organo: d.organo,
-      fecha: d.fecha,
-      titulo: d.titulo,
-      ponente: d.ponente,
-      url_pdf: d.url_pdf,
-      resumen: d.resumen,
-      n_recurso: d.n_recurso,
-      n_resolucion: d.n_resolucion,
-      sede: d.sede,
-      relationship,
-      evidence_basis,
-      reasoning,
-      evidence_level: evLevel as AnalyzedDecision["evidence_level"],
+      proposition: proposition.trim(),
+      search_query_used: searchQueries.join(" | "),
+      total_decisions_found: allResults.length,
+      total_analyzed: analyzedDecisions.length,
+      supporting,
+      contradicting,
+      distinguishing,
+      neutral,
+      insufficient_evidence: insufficient,
       provenance: "AI_GENERATED" as const,
+      uncertainty: analyzedDecisions.some(d => d.evidence_level === "METADATA_ONLY")
+        ? "Algunas resoluciones solo se analizaron con metadatos. Los resultados pueden ser menos precisos para esas resoluciones."
+        : null,
+      disclaimer: "Este análisis es orientativo y generado automáticamente por IA. No constituye asesoramiento jurídico ni sustituye el análisis profesional. Las clasificaciones marcadas como 'AI_GENERATED' son generaciones del modelo y no datos verificados directamente del texto judicial.",
+      _ai_usage: [extractUsage, analysisUsage].filter(Boolean),
     };
   });
 
-  const supporting = analyzedDecisions.filter(d => d.relationship === "SUPPORTS");
-  const contradicting = analyzedDecisions.filter(d => d.relationship === "CONTRADICTS");
-  const distinguishing = analyzedDecisions.filter(d => d.relationship === "DISTINGUISHES");
-  const neutral = analyzedDecisions.filter(d => d.relationship === "NEUTRAL");
-  const insufficient = analyzedDecisions.filter(d => d.relationship === "INSUFFICIENT_EVIDENCE");
+  if ("error" in quotaResult) {
+    return NextResponse.json(
+      { error: "QUOTA_EXCEEDED", category: quotaResult.quota.category, used: quotaResult.quota.used, limit: quotaResult.quota.limit, remaining: quotaResult.quota.remaining, period_end: quotaResult.quota.period_end },
+      { status: 429 }
+    );
+  }
 
-  const result = {
-    proposition: proposition.trim(),
-    search_query_used: searchQueries.join(" | "),
-    total_decisions_found: allResults.length,
-    total_analyzed: analyzedDecisions.length,
-    supporting,
-    contradicting,
-    distinguishing,
-    neutral,
-    insufficient_evidence: insufficient,
-    provenance: "AI_GENERATED" as const,
-    uncertainty: analyzedDecisions.some(d => d.evidence_level === "METADATA_ONLY")
-      ? "Algunas resoluciones solo se analizaron con metadatos. Los resultados pueden ser menos precisos para esas resoluciones."
-      : null,
-    disclaimer: "Este análisis es orientativo y generado automáticamente por IA. No constituye asesoramiento jurídico ni sustituye el análisis profesional. Las clasificaciones marcadas como 'AI_GENERATED' son generaciones del modelo y no datos verificados directamente del texto judicial.",
-    _ai_usage: [extractUsage, analysisUsage].filter(Boolean),
-  };
-
-  return NextResponse.json(result);
+  const { result: operationResult, quota } = quotaResult;
+  return NextResponse.json({
+    ...operationResult,
+    _quota: { category: quota.category, used: quota.used, limit: quota.limit, remaining: quota.remaining, period_end: quota.period_end },
+  });
 }

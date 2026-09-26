@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth/guard";
 import { callAiJson } from "@/lib/ai";
+import { withQuota, getCommercialCategory } from "@/lib/quota";
 
 const CENDOJ_API = process.env.CENDOJ_API_URL || "http://127.0.0.1:8000";
 const CENDOJ_TOKEN = process.env.CENDOJ_SERVICE_TOKEN || "";
@@ -253,17 +254,28 @@ export async function POST(req: NextRequest) {
 
   const userMessage = `${contextLines.join("\n")}\n\n${blockA}\n\n${blockB}`;
 
-  // Call AI API
+  // Call AI API with quota enforcement
+  const category = getCommercialCategory("judgment_comparison");
   try {
-    const aiResult = await callAiJson<{ sections?: unknown[]; uncertainty?: string | null }>({
-      operation_type: "judgment_comparison",
-      user_id: auth.user.userId,
-      system_prompt: SYSTEM_PROMPT,
-      user_message: userMessage,
-      temperature: 0.3,
-      max_tokens: 4000,
+    const quotaResult = await withQuota(auth.user.userId, category, async () => {
+      return callAiJson<{ sections?: unknown[]; uncertainty?: string | null }>({
+        operation_type: "judgment_comparison",
+        user_id: auth.user.userId,
+        system_prompt: SYSTEM_PROMPT,
+        user_message: userMessage,
+        temperature: 0.3,
+        max_tokens: 4000,
+      });
     });
 
+    if ("error" in quotaResult) {
+      return NextResponse.json(
+        { error: "QUOTA_EXCEEDED", category: quotaResult.quota.category, used: quotaResult.quota.used, limit: quotaResult.quota.limit, remaining: quotaResult.quota.remaining, period_end: quotaResult.quota.period_end },
+        { status: 429 }
+      );
+    }
+
+    const { result: aiResult, quota } = quotaResult;
     const parsed = aiResult.data;
 
     // Validate sections
@@ -317,6 +329,7 @@ export async function POST(req: NextRequest) {
         cost_usd: aiResult.cost.total_cost,
         latency_ms: aiResult.latency_ms,
       },
+      _quota: { category: quota.category, used: quota.used, limit: quota.limit, remaining: quota.remaining, period_end: quota.period_end },
     };
 
     return NextResponse.json(result);

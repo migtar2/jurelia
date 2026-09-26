@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth/guard";
 import { callAiJson } from "@/lib/ai";
+import { withQuota, getCommercialCategory } from "@/lib/quota";
 import { db } from "@/lib/db";
 import { documents, documentAnalyses } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
@@ -238,13 +239,67 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // 5. Call AI
+  // 5. Call AI with quota enforcement
+  const category = getCommercialCategory("document_analysis");
   let analysis: AnalysisResult;
   let aiUsage: { provider: string; model: string; tokens: unknown; cost_usd: number | null; latency_ms: number };
   try {
-    const aiResponse = await callMimoAnalysis(extracted_text, auth.user.userId);
-    analysis = aiResponse.result;
-    aiUsage = aiResponse.aiUsage;
+    const quotaResult = await withQuota(auth.user.userId, category, async () => {
+      return callMimoAnalysis(extracted_text, auth.user.userId);
+    });
+
+    if ("error" in quotaResult) {
+      return NextResponse.json(
+        { error: "QUOTA_EXCEEDED", category: quotaResult.quota.category, used: quotaResult.quota.used, limit: quotaResult.quota.limit, remaining: quotaResult.quota.remaining, period_end: quotaResult.quota.period_end },
+        { status: 429 }
+      );
+    }
+
+    analysis = quotaResult.result.result;
+    aiUsage = quotaResult.result.aiUsage;
+
+    // Continue with steps 6-8 using the quota metadata
+    const quota = quotaResult.quota;
+
+    // 6. Persist analysis
+    const [saved] = await db
+      .insert(documentAnalyses)
+      .values({
+        documentId: document_id,
+        userId: auth.user.userId,
+        docType: analysis.doc_type,
+        issues: analysis.issues,
+        arguments: analysis.arguments,
+        citations: analysis.citations,
+      })
+      .returning({ id: documentAnalyses.id });
+
+    // 7. Update document doc_type
+    await db
+      .update(documents)
+      .set({ docType: analysis.doc_type })
+      .where(eq(documents.id, document_id));
+
+    // 8. Return result
+    return NextResponse.json({
+      analysis_id: saved.id,
+      document_id,
+      doc_type: analysis.doc_type,
+      issues: analysis.issues,
+      arguments: analysis.arguments,
+      citations: analysis.citations,
+      issue_count: analysis.issues.length,
+      argument_count: analysis.arguments.length,
+      citation_count: analysis.citations.length,
+      _ai_usage: {
+        provider: aiUsage.provider,
+        model: aiUsage.model,
+        tokens: aiUsage.tokens,
+        cost_usd: aiUsage.cost_usd,
+        latency_ms: aiUsage.latency_ms,
+      },
+      _quota: { category: quota.category, used: quota.used, limit: quota.limit, remaining: quota.remaining, period_end: quota.period_end },
+    });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Error desconocido";
     return NextResponse.json(
@@ -253,42 +308,6 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // 6. Persist analysis
-  const [saved] = await db
-    .insert(documentAnalyses)
-    .values({
-      documentId: document_id,
-      userId: auth.user.userId,
-      docType: analysis.doc_type,
-      issues: analysis.issues,
-      arguments: analysis.arguments,
-      citations: analysis.citations,
-    })
-    .returning({ id: documentAnalyses.id });
-
-  // 7. Update document doc_type
-  await db
-    .update(documents)
-    .set({ docType: analysis.doc_type })
-    .where(eq(documents.id, document_id));
-
-  // 8. Return result
-  return NextResponse.json({
-    analysis_id: saved.id,
-    document_id,
-    doc_type: analysis.doc_type,
-    issues: analysis.issues,
-    arguments: analysis.arguments,
-    citations: analysis.citations,
-    issue_count: analysis.issues.length,
-    argument_count: analysis.arguments.length,
-    citation_count: analysis.citations.length,
-    _ai_usage: {
-      provider: aiUsage.provider,
-      model: aiUsage.model,
-      tokens: aiUsage.tokens,
-      cost_usd: aiUsage.cost_usd,
-      latency_ms: aiUsage.latency_ms,
-    },
-  });
+  // This return is unreachable but satisfies TypeScript
+  return NextResponse.json({ error: "Unreachable" }, { status: 500 });
 }
