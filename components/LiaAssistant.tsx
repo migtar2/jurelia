@@ -22,6 +22,7 @@ const MOVE_MAX_DURATION = 3000;
 const AUTO_MOVE_INTERVAL_MIN = 25000;
 const AUTO_MOVE_INTERVAL_MAX = 60000;
 const MARGIN = 20;
+const HOME_MARGIN = 24;
 
 /* ─── Helpers ──────────────────────────────────────────── */
 function lerp(a: number, b: number, t: number) {
@@ -192,6 +193,16 @@ function LiaInner() {
   );
 
   /* ── Movement ──────────────────────────────────────── */
+  const isAtHome = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    return (
+      Math.abs(rect.left - HOME_MARGIN) < 10 &&
+      Math.abs(rect.bottom - window.innerHeight + HOME_MARGIN) < 10
+    );
+  }, []);
+
   const getBounds = useCallback(() => {
     const size = getLiaSize();
     return {
@@ -239,20 +250,37 @@ function LiaInner() {
     [getBounds, reducedMotion]
   );
 
-  const moveHome = useCallback(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    if (moveTimerRef.current) clearTimeout(moveTimerRef.current);
-    setIsMoving(true);
-    el.style.transition = reducedMotion
-      ? "left 0.1s, top 0.1s"
-      : "left 1.2s cubic-bezier(.34,1.56,.64,1), top 1.2s cubic-bezier(.34,1.56,.64,1)";
-    el.style.left = "auto";
-    el.style.top = "auto";
-    el.style.right = "24px";
-    el.style.bottom = "24px";
-    setTimeout(() => setIsMoving(false), 1200);
-  }, [reducedMotion]);
+  const moveHome = useCallback(
+    (onArrival?: () => void) => {
+      const el = containerRef.current;
+      if (!el) { onArrival?.(); return; }
+
+      // If already at home, fire immediately
+      if (isAtHome()) {
+        onArrival?.();
+        return;
+      }
+
+      if (moveTimerRef.current) clearTimeout(moveTimerRef.current);
+      setIsMoving(true);
+
+      const dur = reducedMotion ? 100 : 900;
+      el.style.transition = reducedMotion
+        ? "left 0.1s, top 0.1s"
+        : `left ${dur}ms cubic-bezier(.34,1.56,.64,1), bottom ${dur}ms cubic-bezier(.34,1.56,.64,1)`;
+      el.style.right = "auto";
+      el.style.top = "auto";
+      el.style.left = `${HOME_MARGIN}px`;
+      el.style.bottom = `${HOME_MARGIN}px`;
+
+      moveTimerRef.current = setTimeout(() => {
+        setIsMoving(false);
+        moveTimerRef.current = null;
+        onArrival?.();
+      }, dur);
+    },
+    [reducedMotion, isAtHome]
+  );
 
   /* ── Auto-move ─────────────────────────────────────── */
   useEffect(() => {
@@ -270,11 +298,9 @@ function LiaInner() {
         const bounds = getBounds();
         const roll = Math.random();
         if (roll < 0.4) {
-          // move to other bottom corner
-          const currentRight =
-            containerRef.current?.style.right !== "auto";
-          if (currentRight) {
-            moveLiaTo(bounds.minX + 20, bounds.maxY);
+          // move to other bottom corner or return home
+          if (isAtHome()) {
+            moveLiaTo(bounds.maxX - 20, bounds.maxY);
           } else {
             moveHome();
           }
@@ -295,7 +321,7 @@ function LiaInner() {
     return () => {
       if (autoMoveRef.current) clearTimeout(autoMoveRef.current);
     };
-  }, [isClient, autoMoveEnabled, reducedMotion, chatOpen, getBounds, moveLiaTo, moveHome]);
+  }, [isClient, autoMoveEnabled, reducedMotion, chatOpen, getBounds, moveLiaTo, moveHome, isAtHome]);
 
   /* ── Chat ──────────────────────────────────────────── */
   const sendMessage = useCallback(
@@ -373,17 +399,27 @@ function LiaInner() {
       <div
         ref={containerRef}
         onClick={() => {
-          if (!isMoving) {
-            setChatOpen((v) => !v);
-            if (!chatOpen) applyState("hello");
+          if (isMoving) return;
+          if (chatOpen) {
+            setChatOpen(false);
+            return;
+          }
+          if (isAtHome()) {
+            applyState("hello");
+            setChatOpen(true);
+          } else {
+            moveHome(() => {
+              applyState("hello");
+              setChatOpen(true);
+            });
           }
         }}
         className="lia-float-container"
         style={{
           position: "fixed",
           zIndex: 900,
-          right: 24,
-          bottom: 24,
+          left: HOME_MARGIN,
+          bottom: HOME_MARGIN,
           width: size.w,
           height: size.h,
           cursor: "pointer",
@@ -397,8 +433,17 @@ function LiaInner() {
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            setChatOpen((v) => !v);
-            if (!chatOpen) applyState("hello");
+            if (chatOpen) {
+              setChatOpen(false);
+            } else if (isAtHome()) {
+              applyState("hello");
+              setChatOpen(true);
+            } else {
+              moveHome(() => {
+                applyState("hello");
+                setChatOpen(true);
+              });
+            }
           }
         }}
       >
@@ -428,8 +473,8 @@ function LiaInner() {
           style={{
             position: "fixed",
             zIndex: 899,
-            bottom: 24 + size.h + 12,
-            right: 24,
+            bottom: HOME_MARGIN + size.h + 12,
+            left: HOME_MARGIN,
             width: Math.min(340, window.innerWidth - 48),
             maxHeight: Math.min(420, window.innerHeight - size.h - 80),
             background: "#fff",
@@ -671,7 +716,7 @@ function LiaInner() {
               <span style={{ margin: "0 4px" }}>|</span>
               <span>Mover:</span>
               <button
-                onClick={moveHome}
+                onClick={() => moveHome()}
                 style={qaBtnStyle}
               >
                 Home
