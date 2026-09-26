@@ -35,15 +35,27 @@ const PRICING_TABLE: ModelPricing[] = [
     updated: "2024-10-01",
   },
   // ── MiMo ──
+  // Fuente: https://mimo.mi.com/docs/price/pay-as-you-go (Overseas, USD)
+  // Vigencia: 2026-05-27 (price reduction permanente)
   {
     provider: "mimo",
     model: "mimo-v2.5-pro",
-    input_per_mtok: 0.0, // Sin precio público confirmado
-    cached_input_per_mtok: 0.0,
-    output_per_mtok: 0.0,
+    input_per_mtok: 0.435,
+    cached_input_per_mtok: 0.0036,
+    output_per_mtok: 0.87,
+    reasoning_per_mtok: null, // Deep thinking tokens se cobran como output
+    source: "mimo.mi.com/docs/price/pay-as-you-go (2026-08-06)",
+    updated: "2026-05-27",
+  },
+  {
+    provider: "mimo",
+    model: "mimo-v2.5",
+    input_per_mtok: 0.14,
+    cached_input_per_mtok: 0.0028,
+    output_per_mtok: 0.28,
     reasoning_per_mtok: null,
-    source: "Estimación conservadora — sin precio público confirmado (2026-09)",
-    updated: "2026-09-26",
+    source: "mimo.mi.com/docs/price/pay-as-you-go (2026-08-06)",
+    updated: "2026-05-27",
   },
 ];
 

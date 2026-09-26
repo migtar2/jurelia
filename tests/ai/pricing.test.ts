@@ -17,7 +17,7 @@ describe("findPricing", () => {
     const p = findPricing("mimo", "mimo-v2.5-pro");
     expect(p).not.toBeNull();
     expect(p!.provider).toBe("mimo");
-    expect(p!.input_per_mtok).toBe(0); // sin precio público
+    expect(p!.input_per_mtok).toBe(0.435); // precio oficial verificado
   });
 
   it("devuelve null para modelo desconocido", () => {
@@ -73,7 +73,7 @@ describe("calculateCost", () => {
     expect(cost.cached_input_cost).toBeCloseTo(0.0000375, 5);
   });
 
-  it("devuelve coste 0 y marcado estimado para MiMo (sin precio)", () => {
+  it("calcula coste real para MiMo (precios oficiales verificados)", () => {
     const usage: AiUsageRecord = {
       input_tokens: 5000,
       cached_input_tokens: null,
@@ -84,9 +84,13 @@ describe("calculateCost", () => {
 
     const cost = calculateCost("mimo", "mimo-v2.5-pro", usage);
 
-    expect(cost.total_cost).toBe(0);
-    expect(cost.estimated).toBe(true);
-    expect(cost.pricing_source).toContain("sin precio público");
+    // Input: 5000 × $0.435/1M = $0.002175
+    expect(cost.input_cost).toBeCloseTo(0.002175, 6);
+    // Output: 2000 × $0.87/1M = $0.00174
+    expect(cost.output_cost).toBeCloseTo(0.00174, 6);
+    expect(cost.total_cost).toBeGreaterThan(0);
+    expect(cost.estimated).toBe(false);
+    expect(cost.pricing_source).toContain("mimo.mi.com");
   });
 
   it("devuelve coste 0 y marcado estimado para modelo desconocido", () => {
