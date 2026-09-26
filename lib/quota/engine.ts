@@ -5,6 +5,7 @@ import { usageReservations } from "@/lib/db/schema";
 import { eq, and, sql, gte, lt } from "drizzle-orm";
 import { getUserPlan, getCategoryLimit } from "@/lib/plans";
 import { getCurrentPeriod } from "./period";
+import { reconcileZombieReservations } from "./reconcile";
 import type { CommercialCategory, PlanId } from "@/lib/plans/types";
 import type { QuotaCheckResult, QuotaStatus, ReservationState } from "./types";
 
@@ -96,7 +97,13 @@ export async function reserveQuota(
   }
 
   // Atomic check + reserve via transaction
-  // PostgreSQL: use a advisory lock per (user_id, category, period) to serialize
+  // First: reconcile any zombie reservations (inline cleanup)
+  try {
+    await reconcileZombieReservations();
+  } catch {
+    // Non-fatal: log but don't block the reservation
+  }
+
   const result = await db.transaction(async (tx) => {
     // Lock on a deterministic key to serialize concurrent requests
     const lockKey = hashCode(`${userId}:${category}:${period.period_start.toISOString()}`);
