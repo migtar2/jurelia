@@ -252,3 +252,16 @@ export const aiUsageLog = pgTable("ai_usage_log", {
   errorType: text("error_type"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+/* ── User Subscriptions — Sistema de planes ── */
+export const userSubscriptions = pgTable("user_subscriptions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().unique().references(() => users.id, { onDelete: "cascade" }),
+  plan: text("plan").notNull().default("free"), // free | pro | unlimited
+  status: text("status").notNull().default("active"), // active | cancelled | expired | suspended
+  effectiveFrom: timestamp("effective_from", { withTimezone: true }).defaultNow().notNull(),
+  effectiveUntil: timestamp("effective_until", { withTimezone: true }),
+  source: text("source").notNull().default("default"), // admin | stripe | default | migration
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
