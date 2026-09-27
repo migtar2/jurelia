@@ -87,6 +87,7 @@ const HELP_KNOWLEDGE_PATTERNS = [
 
 export function routeIntent(message: string, currentRoute?: string): RoutedIntent {
   const clean = message.trim();
+  const lower = clean.toLowerCase();
 
   // 1. Empty or too short
   if (clean.length < 2) {
@@ -98,17 +99,31 @@ export function routeIntent(message: string, currentRoute?: string): RoutedInten
     return { intent: "GREETING", confidence: "high" };
   }
 
-  // 3. Legal boundary (highest priority for safety)
+  // 3. Context help (page-aware) — checked early to avoid false HELP
+  if (
+    lower.includes("qué puedo hacer") ||
+    lower.includes("que puedo hacer") ||
+    lower.includes("qué hago aquí") ||
+    lower.includes("que hago aqui") ||
+    lower.includes("qué hay aquí") ||
+    lower.includes("para qué sirve esto") ||
+    lower.includes("cómo funciona esto") ||
+    (lower.includes("ayuda") && clean.length < 30)
+  ) {
+    return { intent: "CONTEXT_HELP", confidence: "high" };
+  }
+
+  // 4. Legal boundary (highest priority for safety)
   if (LEGAL_BOUNDARY_PATTERNS.some((p) => p.test(clean))) {
     return { intent: "LEGAL_BOUNDARY", confidence: "high" };
   }
 
-  // 4. System status (before HELP to avoid "funcionando CENDOJ" → HELP)
+  // 5. System status
   if (STATUS_PATTERNS.some((p) => p.test(clean))) {
     return { intent: "SYSTEM_STATUS", confidence: "high" };
   }
 
-  // 5. Decision lookup (ROJ/ECLI)
+  // 6. Decision lookup (ROJ/ECLI)
   for (const pattern of DECISION_PATTERNS) {
     const match = clean.match(pattern);
     if (match) {
@@ -137,11 +152,6 @@ export function routeIntent(message: string, currentRoute?: string): RoutedInten
       confidence: "high",
       extracted: { query: query || clean },
     };
-  }
-
-  // 7. Context help (page-aware)
-  if (CONTEXT_HELP_PATTERNS.some((p) => p.test(clean))) {
-    return { intent: "CONTEXT_HELP", confidence: "medium" };
   }
 
   // 8. Knowledge/FAQ
