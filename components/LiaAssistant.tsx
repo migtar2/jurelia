@@ -779,6 +779,41 @@ function LiaInner() {
         .lia-float-container:hover {
           transform: scale(1.05);
         }
+
+        /* ── Chest branding overlay ── */
+        .lia-float-container::before {
+          content: "LIA";
+          position: absolute;
+          z-index: 2;
+          left: 50%;
+          top: 65.5%;
+          transform: translate(-50%, -50%);
+          padding: 1px 3px;
+          border-radius: 999px;
+          background: rgba(247,249,253,.96);
+          color: #1467f3;
+          font-family: Inter, system-ui, sans-serif;
+          font-size: clamp(6px, .55vw, 9px);
+          font-weight: 900;
+          line-height: 1;
+          letter-spacing: .08em;
+          text-align: center;
+          pointer-events: none;
+          white-space: nowrap;
+        }
+
+        .lia-float-container::after {
+          content: "✦";
+          position: absolute;
+          z-index: 3;
+          left: 50%;
+          top: 73.5%;
+          transform: translate(-50%, -50%);
+          color: #1467f3;
+          font-size: clamp(5px, .42vw, 7px);
+          line-height: 1;
+          pointer-events: none;
+        }
       `}</style>
     </>
   );
