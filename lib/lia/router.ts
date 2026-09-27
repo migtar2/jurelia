@@ -59,8 +59,11 @@ const DECISION_PATTERNS = [
 /* ─── Context help patterns ─── */
 
 const CONTEXT_HELP_PATTERNS = [
-  /\b(qué (puedo|hago|estoy|hay)|para qu[eé] sirve|c[oó]mo funciona|c[oó]mo se usa|ayuda aqu[ií]|qu[eé] es esto|qu[eé] es esto)\b/i,
-  /\b(ayuda|help|c[oó]mo usar|instrucciones|gu[ií]a)\b/i,
+  /\b(qué puedo hacer|qué hago|qué estoy viendo|qué hay aquí)\b/i,
+  /\b(para qué sirve|cómo funciona|cómo se usa)\b.*\b(esto|aquí|pantalla|página)\b/i,
+  /\b(ayuda aquí|ayuda con esto|ayuda)\b/i,
+  /\b(qué es esto|en qué estoy)\b/i,
+  /\b(help|guía)\b/i,
 ];
 
 /* ─── Greeting patterns ─── */
