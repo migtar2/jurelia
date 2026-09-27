@@ -167,7 +167,7 @@ export const helpEntries: HelpEntry[] = [
         id: "LIMITACIONES",
         title: "Limitaciones",
         content:
-          "Límite de 500 resoluciones guardadas por cuenta. Los datos se almacenan localmente en su navegador. Para persistencia a largo plazo, exporte regularmente su workspace.",
+          "Límite de 500 resoluciones guardadas por cuenta. Los datos se almacenan de forma segura en tu cuenta y están disponibles desde cualquier dispositivo. Puede exportar regularmente su workspace como respaldo.",
       },
       {
         id: "CONSEJOS",
@@ -456,7 +456,7 @@ export const privacyEntry: HelpEntry = {
       id: "QUE_ES",
       title: "Privacidad",
       content:
-        "Los documentos que suba se procesan en el servidor y no se almacenan permanentemente. Las resoluciones guardadas en su workspace se almacenan localmente en su navegador. Las búsquedas y alertas se almacenan asociadas a su cuenta para poder ejecutarlas periódicamente.",
+        "Los documentos que suba se procesan en el servidor y se almacenan asociados a su cuenta. Las resoluciones guardadas en su workspace se almacenan de forma segura en la base de datos y están disponibles desde cualquier dispositivo. Las búsquedas y alertas se almacenan asociadas a su cuenta para poder ejecutarlas periódicamente.",
     },
     {
       id: "LIMITACIONES",

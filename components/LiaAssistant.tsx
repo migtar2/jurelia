@@ -38,6 +38,20 @@ function getLiaSize() {
   return LIA_SIZES.desktop;
 }
 
+function getModuleFromRoute(route: string): string {
+  const map: Record<string, string> = {
+    "/": "search",
+    "/compare": "compare",
+    "/proposition": "proposition",
+    "/news-compare": "news-compare",
+    "/documents": "documents",
+    "/workspace": "workspace",
+    "/alerts": "alerts",
+    "/help": "help",
+  };
+  return map[route] || "search";
+}
+
 /* ─── Component ────────────────────────────────────────── */
 export default function LiaAssistant() {
   if (!LIA_ENABLED) return null;
@@ -325,9 +339,9 @@ function LiaInner() {
 
   /* ── Chat ──────────────────────────────────────────── */
   const sendMessage = useCallback(
-    (text: string) => {
+    async (text: string) => {
       if (!text.trim()) return;
-      const clean = text.trim().slice(0, 200);
+      const clean = text.trim().slice(0, 500);
 
       // Clear previous timers
       for (const t of chatTimersRef.current) clearTimeout(t);
@@ -336,25 +350,59 @@ function LiaInner() {
       setMessages((prev) => [...prev, { role: "user", text: clean }]);
       applyState("thinking");
 
-      const t1 = setTimeout(() => {
+      try {
+        // Obtener ruta actual del navegador
+        const currentRoute =
+          typeof window !== "undefined" ? window.location.pathname : "/";
+
+        const res = await fetch("/api/lia/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: clean,
+            context: {
+              route: currentRoute,
+              module: getModuleFromRoute(currentRoute),
+            },
+            conversation: messages.slice(-10), // Últimos 10 mensajes
+          }),
+        });
+
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => null);
+          const errorMsg =
+            errorData?.error ||
+            "No he podido consultar JURELIA en este momento.";
+          applyState("talking");
+          setMessages((prev) => [...prev, { role: "lia", text: errorMsg }]);
+          const t1 = setTimeout(() => applyState("idle"), 3000);
+          chatTimersRef.current.add(t1);
+          return;
+        }
+
+        const data = await res.json();
+        applyState("talking");
+        setMessages((prev) => [
+          ...prev,
+          { role: "lia", text: data.answer || "Sin respuesta." },
+        ]);
+        const t1 = setTimeout(() => applyState("idle"), 3000);
+        chatTimersRef.current.add(t1);
+      } catch (err) {
+        console.error("[LIA] Error:", err);
         applyState("talking");
         setMessages((prev) => [
           ...prev,
           {
             role: "lia",
-            text: "Entendido. Déjame revisar la información disponible y te respondo en un momento.",
+            text: "No he podido conectar con el servidor. Comprueba tu conexión e inténtalo de nuevo.",
           },
         ]);
-      }, 1600);
-
-      const t2 = setTimeout(() => {
-        applyState("idle");
-      }, 4600);
-
-      chatTimersRef.current.add(t1);
-      chatTimersRef.current.add(t2);
+        const t1 = setTimeout(() => applyState("idle"), 3000);
+        chatTimersRef.current.add(t1);
+      }
     },
-    [applyState]
+    [applyState, messages]
   );
 
   /* ── Keyboard ──────────────────────────────────────── */

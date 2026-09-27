@@ -12,6 +12,7 @@ export const AI_OPERATIONS = [
   "jurisprudence_classification", // POST /api/documents/search-jurisprudence
   "news_claim_extraction",     // POST /api/news/compare (step 1)
   "news_comparison",           // POST /api/news/compare (step 2)
+  "lia_chat",                  // POST /api/lia/chat
 ] as const;
 
 export type AiOperationType = (typeof AI_OPERATIONS)[number];

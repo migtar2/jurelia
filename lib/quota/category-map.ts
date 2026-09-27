@@ -17,6 +17,7 @@ const OPERATION_TO_CATEGORY: Record<AiOperationType, CommercialCategory> = {
   jurisprudence_classification: "comparison",
   news_claim_extraction: "report",
   news_comparison: "report",
+  lia_chat: "judgment_summary", // LIA chat usa la categoría más barata
 };
 
 /**
