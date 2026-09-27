@@ -88,6 +88,11 @@ const HELP_KNOWLEDGE_PATTERNS = [
 export function routeIntent(message: string, currentRoute?: string): RoutedIntent {
   const clean = message.trim();
   const lower = clean.toLowerCase();
+  // Normalizar para eliminar acentos y caracteres especiales
+  const normalized = lower
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[¿¡]/g, "");
 
   // 1. Empty or too short
   if (clean.length < 2) {
@@ -101,14 +106,12 @@ export function routeIntent(message: string, currentRoute?: string): RoutedInten
 
   // 3. Context help (page-aware) — checked early to avoid false HELP
   if (
-    lower.includes("qué puedo hacer") ||
-    lower.includes("que puedo hacer") ||
-    lower.includes("qué hago aquí") ||
-    lower.includes("que hago aqui") ||
-    lower.includes("qué hay aquí") ||
-    lower.includes("para qué sirve esto") ||
-    lower.includes("cómo funciona esto") ||
-    (lower.includes("ayuda") && clean.length < 30)
+    normalized.includes("que puedo hacer") ||
+    normalized.includes("que hago aqui") ||
+    normalized.includes("que hay aqui") ||
+    normalized.includes("para que sirve esto") ||
+    normalized.includes("como funciona esto") ||
+    (normalized.includes("ayuda") && clean.length < 30)
   ) {
     return { intent: "CONTEXT_HELP", confidence: "high" };
   }

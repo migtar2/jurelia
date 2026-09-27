@@ -211,13 +211,16 @@ async function processIntent(
     /* ─── Help (FAQ/KB): $0 ─── */
     case "HELP": {
       // Doble-check: ¿es realmente una pregunta de contexto?
-      const lowerMsg = message.toLowerCase();
+      const normalizedMsg = message
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[¿¡]/g, "");
       if (
-        lowerMsg.includes("qué puedo hacer") ||
-        lowerMsg.includes("que puedo hacer") ||
-        lowerMsg.includes("qué hago aquí") ||
-        lowerMsg.includes("para qué sirve esto") ||
-        lowerMsg.includes("cómo funciona esto")
+        normalizedMsg.includes("que puedo hacer") ||
+        normalizedMsg.includes("que hago aqui") ||
+        normalizedMsg.includes("para que sirve esto") ||
+        normalizedMsg.includes("como funciona esto")
       ) {
         const ctxHelp = getContextualHelp(context.route);
         if (ctxHelp) {
