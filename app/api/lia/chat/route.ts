@@ -210,6 +210,21 @@ async function processIntent(
 
     /* ─── Help (FAQ/KB): $0 ─── */
     case "HELP": {
+      // Doble-check: ¿es realmente una pregunta de contexto?
+      const lowerMsg = message.toLowerCase();
+      if (
+        lowerMsg.includes("qué puedo hacer") ||
+        lowerMsg.includes("que puedo hacer") ||
+        lowerMsg.includes("qué hago aquí") ||
+        lowerMsg.includes("para qué sirve esto") ||
+        lowerMsg.includes("cómo funciona esto")
+      ) {
+        const ctxHelp = getContextualHelp(context.route);
+        if (ctxHelp) {
+          return { ...base, answer: ctxHelp, source: "help", usage: null };
+        }
+      }
+
       // Buscar primero en FAQ
       const faqAnswer = findFaqAnswer(message);
       if (faqAnswer) {
