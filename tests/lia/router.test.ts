@@ -71,6 +71,24 @@ describe("routeIntent", () => {
       expect(r.intent).toBe("GET_DECISION");
       expect(r.extracted?.ecli).toBeTruthy();
     });
+
+    it("STSJ M 10762/2026 → GET_DECISION (con código tribunal)", () => {
+      const r = routeIntent("explícame la resolución STSJ M 10762/2026");
+      expect(r.intent).toBe("GET_DECISION");
+      expect(r.extracted?.roj).toContain("STSJ");
+      expect(r.extracted?.roj).toContain("10762/2026");
+    });
+
+    it("STSJ CL 3400/2026 → GET_DECISION (Castilla y León)", () => {
+      const r = routeIntent("STSJ CL 3400/2026");
+      expect(r.intent).toBe("GET_DECISION");
+      expect(r.extracted?.roj).toContain("3400/2026");
+    });
+
+    it("AAP A 289/2026 → GET_DECISION (Audiencia Provincial)", () => {
+      const r = routeIntent("AAP A 289/2026");
+      expect(r.intent).toBe("GET_DECISION");
+    });
   });
 
   /* ─── SYSTEM_STATUS ─── */

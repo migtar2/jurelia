@@ -51,7 +51,8 @@ const SEARCH_PATTERNS = [
 /* ─── Decision lookup patterns ─── */
 
 const DECISION_PATTERNS = [
-  /\b(ROJ|STS|STSJ|SAP|JPI|JDO)\s*[:.]?\s*\d+\s*\/\s*\d{4}\b/i,
+  /\b(ROJ|STS|STSJ|SAP|AAP|JPI|JDO|AC)\s+\w+\s+\d+\s*\/\s*\d{4}\b/i, // STSJ M 10762/2026
+  /\b(ROJ|STS|STSJ|SAP|AAP|JPI|JDO|AC)\s*[:.]?\s*\d+\s*\/\s*\d{4}\b/i, // STSJ 10762/2026
   /\bECLI\s*[:.]?\s*ES:\w+:\d+:\d+\b/i,
   /\b(busca[r]?|encuentra[r]?|consulta[r]?|muéstrame|muestra)\b.*\b(ROJ|ECLI|sentencia|resoluci[oó]n)\b.*\b(\d{3,})\b/i,
 ];
@@ -136,7 +137,7 @@ export function routeIntent(message: string, currentRoute?: string): RoutedInten
   for (const pattern of DECISION_PATTERNS) {
     const match = clean.match(pattern);
     if (match) {
-      const rojMatch = clean.match(/(ROJ|STS|STSJ|SAP|JPI|JDO)\s*[:.]?\s*(\d+\s*\/\s*\d{4})/i);
+      const rojMatch = clean.match(/(ROJ|STS|STSJ|SAP|AAP|JPI|JDO|AC)\s+(\w+\s+)?(\d+\s*\/\s*\d{4})/i);
       const ecliMatch = clean.match(/ECLI\s*[:.]?\s*(ES:\w+:\d+:\d+)/i);
       return {
         intent: "GET_DECISION",

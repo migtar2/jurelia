@@ -427,7 +427,7 @@ async function callLlm(
 
 function extractRoj(message: string): string | null {
   const match = message.match(
-    /(?:ROJ\s*[:.]?\s*)?((?:STS|STSJ|SAP|JPI|JDO|AN)\s*\d+\s*\/\s*\d{4})/i
+    /(?:ROJ\s*[:.]?\s*)?((?:STS|STSJ|SAP|AAP|JPI|JDO|AN|AC)\s+(?:\w+\s+)?\d+\s*\/\s*\d{4})/i
   );
   return match ? match[1].replace(/\s+/g, " ").trim() : null;
 }
