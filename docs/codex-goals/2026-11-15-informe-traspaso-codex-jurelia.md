@@ -67,7 +67,7 @@ Nota: el mock de CENDOJ usado en las pruebas vive fuera del repo (`scratch/mock-
 ## 6. Siguientes pasos y recomendaciones
 
 **Requieren autorización expresa de Miguel (bloqueados a la espera):**
-1. **Commit + push + despliegue** de los cambios en `migtar2/jurelia`. Recomendación: un solo commit descriptivo; tras desplegar, comprobar qué commit sirve Vercel (el alias sirvió `f312855` con `main` en `6222b52`) y repetir el recorrido autenticado en el dominio real: login → búsqueda → decisión → resumen IA → noticia por URL → noticia por texto pegado.
+1. ~~Commit + push + despliegue~~ **REALIZADO el 2026-11-15 con autorización de Miguel**: commit `8eba1f5` en `migtar2/jurelia` (`main`), despliegue de producción `cendoj-3dth83iw4` (Ready, build 52 s) y alias `jurelia.vercel.app` re-apuntado al nuevo despliegue (estaba clavado en uno de hace 50 días; la integración Git de Vercel no está activa, los despliegues se hacen con `vercel deploy --prod --yes` + `vercel alias set`). Verificado en producción: ambos dominios sirven el código nuevo; smoke con cuenta de prueba: login, búsqueda (175.508 resultados) y análisis por texto pegado correctos. Un `500` puntual de `/api/cendoj/search` fue transitorio del servicio CENDOJ (timeout de Playwright en el VPS) y no reproducido al reintentar.
 2. **Baja de la cuenta de prueba** `test.hermes.20261115@example.com` en Neon `jurelia-production` (creada para la verificación). Alternativa: conservarla como cuenta de humo/documentarla.
 
 **Recomendaciones de seguimiento (sin bloqueo):**
