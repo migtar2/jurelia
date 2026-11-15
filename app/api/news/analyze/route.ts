@@ -7,6 +7,7 @@ import { requireAuth } from "@/lib/auth/guard";
 import { withQuota, getCommercialCategory } from "@/lib/quota";
 import { validateUrl, fetchArticle } from "@/lib/news/fetch-article";
 import { extractArticle } from "@/lib/news/extract-article";
+import { normalizePastedText, buildPastedArticle } from "@/lib/news/pasted";
 import { extractLegalMetadata } from "@/lib/news/extract-legal-metadata";
 import { executeSearchStrategy } from "@/lib/cendoj/search-strategy";
 import { verifyMatches } from "@/lib/matching/score-match";
@@ -21,39 +22,49 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth();
   if (auth.error) return auth.error;
 
-  let body: { url?: string };
+  let body: { url?: string; text?: string };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
   }
 
-  const url = body.url?.trim();
-  if (!url) {
-    return NextResponse.json({ error: "URL es obligatoria" }, { status: 400 });
+  const url = body.url?.trim() || undefined;
+  const pastedText = normalizePastedText(body.text);
+  if (!url && !pastedText) {
+    return NextResponse.json(
+      { error: "Proporciona una URL o pega el texto de la noticia" },
+      { status: 400 }
+    );
   }
 
-  // Phase 1: URL Validation
-  const validation = validateUrl(url);
-  if (!validation.valid) {
-    return NextResponse.json({ error: validation.error }, { status: 400 });
+  // Phase 1: URL Validation (skipped for pasted text)
+  if (!pastedText) {
+    const validation = validateUrl(url!);
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: 400 });
+    }
   }
 
   // Quota-enforced operation
   const category = getCommercialCategory("news_claim_extraction");
   const quotaResult = await withQuota(auth.user.userId, category, async () => {
-    // Phase 2: Article Extraction
+    // Phase 2: Article Extraction (or pasted text)
     const extractionStart = Date.now();
     let article;
-    try {
-      const fetchResult = await fetchArticle(url);
-      if (fetchResult.status >= 400) {
-        throw new Error(`La URL devolvió HTTP ${fetchResult.status}`);
+    if (pastedText) {
+      article = buildPastedArticle(pastedText);
+    } else {
+      try {
+        const fetchResult = await fetchArticle(url!);
+        if (fetchResult.status >= 400) {
+          throw new Error(`La URL devolvió HTTP ${fetchResult.status}`);
+        }
+        article = extractArticle(fetchResult.html, fetchResult.final_url);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(`Error obteniendo artículo: ${msg}`);
       }
-      article = extractArticle(fetchResult.html, fetchResult.final_url);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`Error obteniendo artículo: ${msg}`);
     }
     const extractionMs = Date.now() - extractionStart;
 
@@ -96,8 +107,8 @@ export async function POST(req: NextRequest) {
     legal_metadata: opResult.legalMetadata,
     match: opResult.match,
     diagnostics: {
-      url,
-      http_status: 200,
+      url: url ?? "",
+      http_status: pastedText ? 0 : 200,
       extractor: opResult.article.extraction_method,
       extraction_ms: opResult.extractionMs,
       search_ms: opResult.searchMs,

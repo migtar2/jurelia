@@ -6,6 +6,7 @@ import Link from "next/link";
 import { openHelpDrawer } from "@/components/HelpDrawer";
 import type { NewsComparisonResult, ExtractedClaim, ClaimStatus, HeadlineAccuracy } from "@/lib/news/compare-types";
 import ToastContainer, { showToast } from "@/components/Toast";
+import AuthRequiredCard from "@/components/AuthRequiredCard";
 import { useAuth } from "@/lib/auth/context";
 
 function M({ name, className = "" }: { name: string; className?: string }) {
@@ -63,6 +64,7 @@ function NewsComparePage() {
   const [comparing, setComparing] = useState(false);
   const [result, setResult] = useState<NewsComparisonResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [authRequired, setAuthRequired] = useState(false);
   const [phase, setPhase] = useState("");
   const { user } = useAuth();
   const [saving, setSaving] = useState(false);
@@ -104,6 +106,10 @@ function NewsComparePage() {
       });
 
       const data = await res.json();
+      if (res.status === 401) {
+        setAuthRequired(true);
+        return;
+      }
       if (!res.ok || data.error) {
         setError(data.error || `HTTP ${res.status}`);
         return;
@@ -351,6 +357,9 @@ function NewsComparePage() {
                 </div>
               ))}
             </div>
+
+            {/* Session required */}
+            {authRequired && <AuthRequiredCard onDismiss={() => setAuthRequired(false)} />}
 
             {/* Error */}
             {error && (

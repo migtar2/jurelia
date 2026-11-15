@@ -8,6 +8,8 @@ import ToastContainer, { showToast } from "@/components/Toast";
 import { openHelpDrawer } from "@/components/HelpDrawer";
 import * as compareStore from "@/lib/compare/store";
 import FeedbackButton from "@/components/FeedbackButton";
+import { AuthProvider, useAuth } from "@/lib/auth/context";
+import { setLiaHidden, LIA_HIDDEN_KEY } from "@/components/LiaAssistant";
 
 /* ─── Types ─────────────────────────────────────────────── */
 
@@ -238,13 +240,15 @@ function M({ name, className = "" }: { name: string; className?: string }) {
 
 export default function Home() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-surface-container-highest border-t-primary rounded-full animate-spin" />
-      </div>
-    }>
-      <HomeInner />
-    </Suspense>
+    <AuthProvider>
+      <Suspense fallback={
+        <div className="min-h-screen bg-background flex items-center justify-center">
+          <div className="w-8 h-8 border-2 border-surface-container-highest border-t-primary rounded-full animate-spin" />
+        </div>
+      }>
+        <HomeInner />
+      </Suspense>
+    </AuthProvider>
   );
 }
 
@@ -275,6 +279,29 @@ function HomeInner() {
   const [showDiag, setShowDiag] = useState(false);
   const [diag, setDiag] = useState<DiagInfo>({});
   const [error, setError] = useState<string | null>(null);
+
+  // Session state
+  const { user, loading: authLoading, logout } = useAuth();
+  const [authRequired, setAuthRequired] = useState(false);
+
+  // Lía avatar visibility
+  const [liaHidden, setLiaHiddenState] = useState(false);
+  useEffect(() => {
+    try {
+      setLiaHiddenState(localStorage.getItem(LIA_HIDDEN_KEY) === "1");
+    } catch { /* storage unavailable */ }
+  }, []);
+  const toggleLia = () => {
+    const next = !liaHidden;
+    setLiaHiddenState(next);
+    setLiaHidden(next);
+  };
+
+  /** Login/register link that returns to the current page (filters preserved). */
+  const gotoAuth = (path: string) => {
+    const current = window.location.pathname + window.location.search;
+    return `${path}?next=${encodeURIComponent(current)}`;
+  };
 
   // Filter state
   const [court, setCourt] = useState("");
@@ -342,11 +369,15 @@ function HomeInner() {
         setSearching(true);
         setError(null);
         fetch(`/api/cendoj/search?${params.toString()}`, { signal: AbortSignal.timeout(130_000) })
-          .then(r => r.json())
-          .then(data => {
+          .then(async r => ({ status: r.status, data: await r.json() }))
+          .then(({ status, data }) => {
+            if (status === 401) {
+              setAuthRequired(true);
+              return;
+            }
             if (data.error) setError(data.error);
             else setSearchData(data);
-            setDiag({ endpoint: data._endpoint, httpStatus: 200, elapsed_ms: data._elapsed_ms, totalResults: data.total });
+            setDiag({ endpoint: data._endpoint, httpStatus: status, elapsed_ms: data._elapsed_ms, totalResults: data.total });
           })
           .catch(err => setError(`Error: ${err instanceof Error ? err.message : String(err)}`))
           .finally(() => setSearching(false));
@@ -383,6 +414,8 @@ function HomeInner() {
 
   // News analysis state
   const [newsUrl, setNewsUrl] = useState("");
+  const [newsInputMode, setNewsInputMode] = useState<"url" | "text">("url");
+  const [newsText, setNewsText] = useState("");
   const [newsAnalyzing, setNewsAnalyzing] = useState(false);
   const [newsResult, setNewsResult] = useState<NewsAnalysisResult | null>(null);
   const [newsError, setNewsError] = useState<string | null>(null);
@@ -485,6 +518,11 @@ function HomeInner() {
     try {
       const res = await fetch(endpoint, { signal: AbortSignal.timeout(130_000) });
       const data = await res.json();
+      if (res.status === 401) {
+        setAuthRequired(true);
+        setDiag({ endpoint, httpStatus: 401, error: "No autenticado" });
+        return;
+      }
       if (!res.ok || data.error) {
         setError(data.error || `HTTP ${res.status}`);
         setDiag({ endpoint, httpStatus: res.status, error: data.error, rawJson: data });
@@ -508,6 +546,7 @@ function HomeInner() {
     try {
       const res = await fetch(`/api/cendoj/decision?pdf_url=${encodeURIComponent(result.url_pdf)}`, { signal: AbortSignal.timeout(130_000) });
       const data = await res.json();
+      if (res.status === 401) { setAuthRequired(true); return; }
       if (!res.ok || data.error) { setError(data.error || `HTTP ${res.status}`); return; }
       setDecisionData(data);
     } catch (err: unknown) { setError(`Error: ${err instanceof Error ? err.message : String(err)}`); }
@@ -543,6 +582,10 @@ function HomeInner() {
         signal: AbortSignal.timeout(120_000),
       });
       const data = await res.json();
+      if (res.status === 401) {
+        setAuthRequired(true);
+        return;
+      }
       if (!res.ok || data.error) {
         setSummaryError(data.error || `HTTP ${res.status}`);
         return;
@@ -558,24 +601,31 @@ function HomeInner() {
 
   /* ── News analysis ── */
   const handleNewsAnalyze = async (url?: string) => {
+    // Explicit url (drag&drop, examples) always wins; otherwise follow the input mode
+    const useText = !url && newsInputMode === "text";
     const targetUrl = url || newsUrl.trim();
-    if (!targetUrl) return;
+    const targetText = newsText.trim();
+    if (useText ? !targetText : !targetUrl) return;
     if (newsAnalyzing) return;
 
     setNewsAnalyzing(true);
     setNewsError(null);
     setNewsResult(null);
-    setNewsPhase("Validando URL...");
+    setNewsPhase(useText ? "Analizando texto y buscando en CENDOJ..." : "Validando URL...");
 
     try {
       setNewsPhase("Extrayendo artículo y buscando en CENDOJ...");
       const res = await fetch("/api/news/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: targetUrl }),
+        body: JSON.stringify(useText ? { text: targetText } : { url: targetUrl }),
         signal: AbortSignal.timeout(180_000),
       });
       const data = await res.json();
+      if (res.status === 401) {
+        setAuthRequired(true);
+        return;
+      }
       if (!res.ok || data.error) {
         setNewsError(data.error || `HTTP ${res.status}`);
         return;
@@ -734,6 +784,48 @@ function HomeInner() {
             >
               <M name="help_outline" className="!text-base" />
             </button>
+            <button
+              onClick={toggleLia}
+              aria-label={liaHidden ? "Mostrar a Lía" : "Ocultar a Lía"}
+              title={liaHidden ? "Mostrar a Lía" : "Ocultar a Lía"}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-surface-container-low hover:bg-surface-container text-on-surface-variant hover:text-primary transition-colors text-xs"
+            >
+              <M name={liaHidden ? "visibility_off" : "visibility"} className="!text-base" />
+            </button>
+            {/* Session */}
+            {!authLoading && (
+              user ? (
+                <div className="flex items-center gap-1.5 pl-2 border-l border-outline-variant">
+                  <div className="w-7 h-7 rounded-full bg-primary text-on-primary flex items-center justify-center text-[11px] font-bold uppercase shrink-0">
+                    {(user.name || user.email).charAt(0)}
+                  </div>
+                  <div className="hidden lg:flex flex-col max-w-[120px]">
+                    <span className="text-[11px] font-semibold text-on-surface truncate leading-none">{user.name || user.email.split("@")[0]}</span>
+                    <button
+                      onClick={() => { void logout(); setAuthRequired(false); }}
+                      className="text-[10px] text-secondary hover:text-primary text-left leading-none mt-0.5"
+                    >
+                      Cerrar sesión
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => { void logout(); setAuthRequired(false); }}
+                    aria-label="Cerrar sesión"
+                    className="lg:hidden flex items-center px-2 py-1.5 rounded-lg bg-surface-container-low hover:bg-surface-container text-on-surface-variant text-xs"
+                  >
+                    <M name="logout" className="!text-base" />
+                  </button>
+                </div>
+              ) : (
+                <Link
+                  href={gotoAuth("/auth/login")}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-on-primary hover:bg-primary-container transition-colors text-xs font-semibold shrink-0"
+                >
+                  <M name="login" className="!text-base" />
+                  <span className="hidden sm:inline">Iniciar sesión</span>
+                </Link>
+              )
+            )}
           </div>
         </div>
       </header>
@@ -764,6 +856,42 @@ function HomeInner() {
 
       {/* ═══ Main ═══ */}
       <main className="max-w-[1360px] mx-auto px-4 lg:px-8 py-5 lg:py-6">
+        {/* Session required */}
+        {authRequired && (
+          <div className="mb-4 p-4 bg-secondary-container rounded-xl border border-primary flex flex-col sm:flex-row sm:items-center gap-3">
+            <M name="lock_person" className="!text-2xl text-primary shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-on-surface">Inicia sesión para continuar</p>
+              <p className="text-xs text-on-surface-variant mt-0.5">
+                {user
+                  ? "Tu sesión ha caducado. Vuelve a iniciar sesión para usar el buscador y el análisis de noticias."
+                  : "El buscador de jurisprudencia y el análisis de noticias requieren una cuenta gratuita."}
+              </p>
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <button
+                onClick={() => router.push(gotoAuth("/auth/login"))}
+                className="px-4 py-2 rounded-lg bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container transition-colors"
+              >
+                Iniciar sesión
+              </button>
+              <button
+                onClick={() => router.push(gotoAuth("/auth/register"))}
+                className="px-4 py-2 rounded-lg bg-surface-container-low hover:bg-surface-container text-on-surface text-xs font-semibold transition-colors"
+              >
+                Crear cuenta
+              </button>
+              <button
+                onClick={() => setAuthRequired(false)}
+                aria-label="Cerrar aviso"
+                className="px-2 py-2 rounded-lg bg-surface-container-low hover:bg-surface-container text-on-surface-variant text-xs"
+              >
+                <M name="close" className="!text-base" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Global error */}
         {error && (
           <div className="mb-4 p-3 bg-error-container rounded-xl text-sm flex items-start gap-2">
@@ -1304,7 +1432,7 @@ function HomeInner() {
                     </h2>
                     <span className="text-[9px] px-1.5 py-0.5 rounded bg-primary text-on-primary font-bold uppercase">Diferenciador</span>
                   </div>
-                  <p className="text-xs text-secondary mb-4">Arrastra una noticia jurídica o pega su enlace para localizar la resolución original en CENDOJ.</p>
+                  <p className="text-xs text-secondary mb-4">Arrastra una noticia jurídica, pega su enlace o su texto para localizar la resolución original en CENDOJ.</p>
 
                   {/* Drop Zone */}
                   <div
@@ -1331,7 +1459,32 @@ function HomeInner() {
                     </div>
                   </div>
 
+                  {/* Input mode toggle */}
+                  <div className="flex items-center gap-1.5 mb-3">
+                    <button
+                      onClick={() => setNewsInputMode("url")}
+                      disabled={newsAnalyzing}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
+                        newsInputMode === "url" ? "bg-primary text-on-primary" : "bg-surface-container-low text-on-surface-variant hover:bg-surface-container"
+                      }`}
+                    >
+                      <M name="link" className="!text-sm" />
+                      Enlace
+                    </button>
+                    <button
+                      onClick={() => setNewsInputMode("text")}
+                      disabled={newsAnalyzing}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
+                        newsInputMode === "text" ? "bg-primary text-on-primary" : "bg-surface-container-low text-on-surface-variant hover:bg-surface-container"
+                      }`}
+                    >
+                      <M name="content_paste" className="!text-sm" />
+                      Texto pegado
+                    </button>
+                  </div>
+
                   {/* URL Input */}
+                  {newsInputMode === "url" && (
                   <div className="flex flex-col gap-2 mb-3">
                     <label className="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider flex items-center justify-between">
                       <span className="flex items-center gap-1">
@@ -1373,6 +1526,41 @@ function HomeInner() {
                       {newsAnalyzing ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Analizando...</> : <><M name="science" className="!text-lg" />Analizar noticia</>}
                     </button>
                   </div>
+                  )}
+
+                  {/* Pasted text input */}
+                  {newsInputMode === "text" && (
+                  <div className="flex flex-col gap-2 mb-3">
+                    <label className="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider flex items-center justify-between">
+                      <span className="flex items-center gap-1">
+                        <M name="content_paste" className="!text-xs" />
+                        TEXTO DE LA NOTICIA
+                      </span>
+                      <button onClick={async () => { try { const t = await navigator.clipboard.readText(); if (t) setNewsText(t); } catch {} }} className="text-primary text-[10px] hover:underline flex items-center gap-0.5">
+                        <M name="content_paste" className="!text-xs" />
+                        pegar portapapeles
+                      </button>
+                    </label>
+                    <textarea
+                      value={newsText}
+                      onChange={(e) => setNewsText(e.target.value)}
+                      rows={7}
+                      placeholder="Pega aquí el texto completo de la noticia jurídica..."
+                      className="w-full p-3 rounded-lg bg-surface-container text-sm text-on-surface placeholder:text-outline focus:outline-none focus:ring-2 focus:ring-primary resize-y leading-relaxed"
+                      disabled={newsAnalyzing}
+                    />
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-outline">{newsText.trim().length} caracteres</span>
+                    </div>
+                    <button
+                      onClick={() => handleNewsAnalyze()}
+                      disabled={newsAnalyzing || newsText.trim().length < 20}
+                      className="w-full h-11 rounded-xl bg-primary hover:bg-primary-container text-on-primary text-sm font-semibold flex items-center justify-center gap-2 shadow-md active:scale-[0.99] transition-all disabled:opacity-60"
+                    >
+                      {newsAnalyzing ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Analizando...</> : <><M name="science" className="!text-lg" />Analizar texto</>}
+                    </button>
+                  </div>
+                  )}
 
                   {/* Pipeline Progress */}
                   {newsAnalyzing && (
@@ -1861,10 +2049,17 @@ function NewsResultPanel({ result, onBack }: { result: NewsAnalysisResult; onBac
           {article.publication_date && <span>· {article.publication_date}</span>}
           {article.author && <span>· {article.author}</span>}
         </div>
-        <a href={article.url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-primary hover:underline mt-1.5 inline-flex items-center gap-1">
-          <M name="open_in_new" className="!text-xs" />
-          Abrir noticia original
-        </a>
+        {article.url ? (
+          <a href={article.url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-primary hover:underline mt-1.5 inline-flex items-center gap-1">
+            <M name="open_in_new" className="!text-xs" />
+            Abrir noticia original
+          </a>
+        ) : (
+          <span className="text-[11px] text-secondary mt-1.5 inline-flex items-center gap-1">
+            <M name="content_paste" className="!text-xs" />
+            Texto pegado manualmente
+          </span>
+        )}
       </div>
 
       {/* Legal Metadata */}
@@ -2057,6 +2252,7 @@ function NewsResultPanel({ result, onBack }: { result: NewsAnalysisResult; onBac
                 Extrae las afirmaciones del artículo y las compara con los datos oficiales de CENDOJ.
               </p>
             </div>
+            {result.article.url && (
             <Link
               href={`/news-compare?url=${encodeURIComponent(result.article.url)}`}
               className="shrink-0 px-4 py-2 rounded-xl bg-primary text-on-primary text-xs font-semibold flex items-center gap-1.5 shadow-md hover:bg-primary-container active:scale-[0.99] transition-all"
@@ -2064,6 +2260,7 @@ function NewsResultPanel({ result, onBack }: { result: NewsAnalysisResult; onBac
               <M name="fact_check" className="!text-sm" />
               Contrastar
             </Link>
+            )}
           </div>
         </div>
       )}

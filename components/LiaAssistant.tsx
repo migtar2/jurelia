@@ -8,6 +8,37 @@ import { LIA_STATES, getLiaState } from "@/lib/lia/lia-states";
 const LIA_ENABLED = process.env.NEXT_PUBLIC_LIA_ENABLED !== "false";
 const LIA_AUTO_MOVE = process.env.NEXT_PUBLIC_LIA_AUTO_MOVE !== "false";
 
+/* ─── Visibility (user preference) ─────────────────────── */
+export const LIA_HIDDEN_KEY = "jurelia-lia-hidden";
+export const LIA_TOGGLE_EVENT = "jurelia:lia-toggle";
+
+function useLiaHidden(): boolean {
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => {
+    const read = () => {
+      try {
+        setHidden(localStorage.getItem(LIA_HIDDEN_KEY) === "1");
+      } catch {
+        /* storage unavailable — keep visible */
+      }
+    };
+    read();
+    window.addEventListener(LIA_TOGGLE_EVENT, read);
+    return () => window.removeEventListener(LIA_TOGGLE_EVENT, read);
+  }, []);
+  return hidden;
+}
+
+/** Persist the Lía visibility preference and notify mounted instances. */
+export function setLiaHidden(hidden: boolean): void {
+  try {
+    localStorage.setItem(LIA_HIDDEN_KEY, hidden ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+  window.dispatchEvent(new Event(LIA_TOGGLE_EVENT));
+}
+
 /* ─── Sizes ────────────────────────────────────────────── */
 const LIA_SIZES = {
   desktop: { w: 110, h: 136 },
@@ -54,7 +85,8 @@ function getModuleFromRoute(route: string): string {
 
 /* ─── Component ────────────────────────────────────────── */
 export default function LiaAssistant() {
-  if (!LIA_ENABLED) return null;
+  const hidden = useLiaHidden();
+  if (!LIA_ENABLED || hidden) return null;
   return <LiaInner />;
 }
 

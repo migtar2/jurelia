@@ -44,7 +44,7 @@ export interface ArticleData {
   headline: string | null;
   article_text: string;
   html_length: number;
-  extraction_method: "static" | "readability" | "json-ld" | "og-fallback";
+  extraction_method: "static" | "readability" | "json-ld" | "og-fallback" | "pasted";
   /** Structured data extracted from JSON-LD, Open Graph, Twitter Cards */
   structured_data: StructuredData | null;
   /** 0-1 confidence in extraction quality */

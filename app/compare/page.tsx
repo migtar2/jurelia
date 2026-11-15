@@ -9,6 +9,7 @@ import type { CompareDecision, ComparisonResult } from "@/lib/compare/types";
 import * as workspaceStore from "@/lib/workspace/store";
 import { formatComparisonAsText, copyToClipboard, downloadJSON } from "@/lib/export-utils";
 import ToastContainer, { showToast } from "@/components/Toast";
+import AuthRequiredCard from "@/components/AuthRequiredCard";
 
 function M({ name, className = "" }: { name: string; className?: string }) {
   return <span className={`material-symbols-outlined ${className}`}>{name}</span>;
@@ -33,6 +34,7 @@ export default function ComparePage() {
   const [comparing, setComparing] = useState(false);
   const [result, setResult] = useState<ComparisonResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [authRequired, setAuthRequired] = useState(false);
   const [progressPhase, setProgressPhase] = useState("");
 
   useEffect(() => {
@@ -70,6 +72,10 @@ export default function ComparePage() {
       });
 
       const data = await res.json();
+      if (res.status === 401) {
+        setAuthRequired(true);
+        return;
+      }
       if (!res.ok || data.error) {
         setError(data.error || `HTTP ${res.status}`);
         return;
@@ -186,6 +192,9 @@ export default function ComparePage() {
                 </Link>
               )}
             </div>
+
+            {/* Session required */}
+            {authRequired && <AuthRequiredCard onDismiss={() => setAuthRequired(false)} />}
 
             {/* Error */}
             {error && (

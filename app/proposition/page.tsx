@@ -5,6 +5,7 @@ import Link from "next/link";
 import * as workspaceStore from "@/lib/workspace/store";
 import { formatPropositionAsText, copyToClipboard, downloadJSON } from "@/lib/export-utils";
 import ToastContainer, { showToast } from "@/components/Toast";
+import AuthRequiredCard from "@/components/AuthRequiredCard";
 
 /* ── Types ── */
 
@@ -102,6 +103,7 @@ export default function PropositionPage() {
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState<PropositionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [authRequired, setAuthRequired] = useState(false);
   const [progressPhase, setProgressPhase] = useState("");
 
   const handleAnalyze = async () => {
@@ -127,6 +129,10 @@ export default function PropositionPage() {
       });
 
       const data = await res.json();
+      if (res.status === 401) {
+        setAuthRequired(true);
+        return;
+      }
       if (!res.ok || data.error) {
         setError(data.error || `HTTP ${res.status}`);
         return;
@@ -300,6 +306,9 @@ export default function PropositionPage() {
                 )}
               </button>
             </div>
+
+            {/* Session required */}
+            {authRequired && <AuthRequiredCard onDismiss={() => setAuthRequired(false)} />}
 
             {/* Error */}
             {error && (

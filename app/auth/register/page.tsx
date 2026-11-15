@@ -1,11 +1,17 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth/context";
 
-export default function RegisterPage() {
+/** Only allow same-site relative paths as post-register destination. */
+function safeNext(raw: string | null): string {
+  if (raw && raw.startsWith("/") && !raw.startsWith("//")) return raw;
+  return "/workspace";
+}
+
+function RegisterForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -14,6 +20,8 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const { register } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const next = safeNext(searchParams.get("next"));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,7 +42,7 @@ export default function RegisterPage() {
     setLoading(false);
 
     if (result.ok) {
-      router.push("/workspace");
+      router.push(next);
     } else {
       setError(result.error || "Error al registrarse");
     }
@@ -127,12 +135,20 @@ export default function RegisterPage() {
 
           <p className="text-xs text-center text-secondary">
             ¿Ya tienes cuenta?{" "}
-            <Link href="/auth/login" className="text-primary hover:underline font-medium">
+            <Link href={`/auth/login?next=${encodeURIComponent(next)}`} className="text-primary hover:underline font-medium">
               Inicia sesión
             </Link>
           </p>
         </form>
       </div>
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-background" />}>
+      <RegisterForm />
+    </Suspense>
   );
 }
