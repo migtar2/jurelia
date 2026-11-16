@@ -44,4 +44,4 @@
 
 ## SAFE_TO_COMMIT / SAFE_TO_PUSH / SAFE_TO_DEPLOY
 
-**NO / NO / NO** — pendientes de la decisión 4 de Miguel.
+**COMMIT/PUSH: SÍ** (`b5e92f1`, autorizado por Miguel el 2026-11-16); **DEPLOY: NO** — sin cambios de código.

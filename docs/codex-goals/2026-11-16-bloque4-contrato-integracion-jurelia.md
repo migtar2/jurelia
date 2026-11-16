@@ -52,4 +52,4 @@ Una sola operación que el portal (Previa) puede invocar sobre Jurelia, con resp
 
 ## SAFE_TO_COMMIT / SAFE_TO_PUSH / SAFE_TO_DEPLOY
 
-**NO / NO / NO** — borrador documental sin commitear; la habilitación real requiere el acuerdo del equipo de Legaltechia y autorización expresa de Miguel.
+**COMMIT/PUSH: SÍ** (`b5e92f1`, autorizado por Miguel el 2026-11-16); **DEPLOY: NO** — habilitar la integración exige el acuerdo del equipo de Legaltechia y autorización expresa.
